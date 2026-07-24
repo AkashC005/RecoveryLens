@@ -28,18 +28,10 @@
 ## 4. Feature set
 
 - 17 source columns → 17 model features
-- Deficits use `C` (can't assess) → missing, kept distinct from `N` (absent)
+- Deficits encoded ordinally `N=0 < Y=1 < C=2` — "can't assess" is a verified severity signal, not missingness
 
 | Feature | Missing % |
 |---|---|
-| `RDEF1` | 1.3% |
-| `RDEF2` | 0.6% |
-| `RDEF3` | 1.3% |
-| `RDEF4` | 3.0% |
-| `RDEF5` | 20.3% |
-| `RDEF6` | 17.7% |
-| `RDEF7` | 8.2% |
-| `RDEF8` | 6.4% |
 
 ## 5. Outcome definitions
 
