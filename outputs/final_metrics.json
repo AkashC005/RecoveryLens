@@ -1,0 +1,126 @@
+{
+  "metrics": {
+    "death_14d": {
+      "auc": 0.7932442536514935,
+      "ci": [
+        0.7689171758621867,
+        0.817704447138154
+      ],
+      "brier": 0.0723650654533608,
+      "cal_slope": 0.9389568791345161,
+      "citl": -0.02466696169257734,
+      "calibrated": "not needed",
+      "C": 0.1,
+      "events": 1430
+    },
+    "recurrence_14d": {
+      "auc": 0.5898881446107496,
+      "ci": [
+        0.5301379976887851,
+        0.6457648499362582
+      ],
+      "brier": 0.020631416155401407,
+      "cal_slope": 0.6871562656670621,
+      "citl": 0.05098317048595952,
+      "calibrated": "not needed",
+      "C": 0.1,
+      "events": 313
+    },
+    "haemorrhage_14d": {
+      "auc": 0.7321892875715029,
+      "ci": [
+        0.6595125964679863,
+        0.8021486858025321
+      ],
+      "brier": 0.010377899989990736,
+      "cal_slope": 0.9056143946893702,
+      "citl": 0.3298325689518196,
+      "calibrated": "n/a \u2014 split imbalance",
+      "C": 0.1,
+      "events": 120
+    },
+    "pe_14d": {
+      "auc": 0.6660525810784877,
+      "ci": [
+        0.5804831460409959,
+        0.7516323100895934
+      ],
+      "brier": 0.006892485134964301,
+      "cal_slope": 0.7815008331400691,
+      "citl": 0.010353729401406908,
+      "calibrated": "not needed",
+      "C": 0.1,
+      "events": 107
+    },
+    "poor_outcome_6m": {
+      "auc": 0.8015800428276892,
+      "ci": [
+        0.7873905100080065,
+        0.8153102738373049
+      ],
+      "brier": 0.1730144017616793,
+      "cal_slope": 1.0353845415367662,
+      "citl": 0.04544431580004124,
+      "calibrated": "not needed",
+      "C": 0.1,
+      "events": 9679
+    },
+    "nonadherence_6m": {
+      "auc": 0.6261655124712153,
+      "ci": [
+        0.5995143531669268,
+        0.6520831303089727
+      ],
+      "brier": 0.14514505931852775,
+      "cal_slope": 0.9819014394474955,
+      "citl": 0.10925669037288151,
+      "calibrated": "not needed",
+      "C": 0.1,
+      "events": 1901
+    }
+  },
+  "top_drivers": {
+    "death_14d": [
+      "level of consciousness",
+      "number of deficits present",
+      "age",
+      "visual field loss",
+      "delay from onset to treatment"
+    ],
+    "recurrence_14d": [
+      "CT performed before treatment",
+      "aspirin allocation",
+      "heparin allocation = N",
+      "delay from onset to treatment",
+      "visuospatial difficulty"
+    ],
+    "haemorrhage_14d": [
+      "delay from onset to treatment",
+      "heparin allocation = M",
+      "number of deficits present",
+      "heparin allocation = N",
+      "age"
+    ],
+    "pe_14d": [
+      "number of deficits present",
+      "visual field loss",
+      "leg or foot weakness",
+      "heparin allocation = M",
+      "other neurological deficit"
+    ],
+    "poor_outcome_6m": [
+      "age",
+      "level of consciousness",
+      "number of deficits present",
+      "CT performed before treatment",
+      "deficits that could not be assessed"
+    ],
+    "nonadherence_6m": [
+      "aspirin in preceding 3 days",
+      "aspirin allocation",
+      "age",
+      "CT performed before treatment",
+      "infarct visible on CT"
+    ]
+  }
+}

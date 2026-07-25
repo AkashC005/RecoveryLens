@@ -1,0 +1,17 @@
+# RecoveryLens API — pinned for deployment.
+#
+# scikit-learn is pinned to the version that PICKLED the models. Loading a
+# pickle under a different minor version produces an InconsistentVersionWarning
+# and, per sklearn's own docs, "may lead to invalid results" — silently. If you
+# retrain, change this pin to match.
+scikit-learn==1.8.0
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+
+pandas==2.2.3
+numpy==2.1.3
+joblib==1.4.2
+shap==0.46.0

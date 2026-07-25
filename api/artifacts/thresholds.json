@@ -1,0 +1,62 @@
+{
+  "death_14d": {
+    "label": "Death within 14 days",
+    "horizon_days": 14,
+    "actionability": "actionable",
+    "note": "Supports monitoring intensity and escalation planning.",
+    "p50": 0.044745037753853356,
+    "p80": 0.14342743991648876,
+    "p95": 0.32837274564832636,
+    "train_prevalence": 0.09197324414715718
+  },
+  "recurrence_14d": {
+    "label": "Recurrent stroke within 14 days",
+    "horizon_days": 14,
+    "actionability": "exploratory",
+    "note": "Discrimination near chance; no net benefit at actionable thresholds. Presented as exploratory only.",
+    "p50": 0.018631486915968873,
+    "p80": 0.02698939812764077,
+    "p95": 0.03623062246381515,
+    "train_prevalence": 0.020131206586056084
+  },
+  "haemorrhage_14d": {
+    "label": "Cerebral bleed within 14 days",
+    "horizon_days": 14,
+    "actionability": "vigilance",
+    "note": "Ranks well but net benefit is confined to very low thresholds. Use for low-cost vigilance, not active intervention.",
+    "p50": 0.00493295133395384,
+    "p80": 0.0109085200386478,
+    "p95": 0.0233464263672582,
+    "train_prevalence": 0.007718034473887317
+  },
+  "pe_14d": {
+    "label": "Pulmonary embolism within 14 days",
+    "horizon_days": 14,
+    "actionability": "vigilance",
+    "note": "Low prevalence; supports awareness rather than intervention.",
+    "p50": 0.005223471709745194,
+    "p80": 0.010550407017200725,
+    "p95": 0.017547904739933867,
+    "train_prevalence": 0.006881914072549524
+  },
+  "poor_outcome_6m": {
+    "label": "Death or dependency at 6 months",
+    "horizon_days": 180,
+    "actionability": "actionable",
+    "note": "Strongest outcome. Supports rehabilitation referral priority.",
+    "p50": 0.6461612531753567,
+    "p80": 0.8788488654709189,
+    "p95": 0.9609208763831362,
+    "train_prevalence": 0.6276099079237453
+  },
+  "nonadherence_6m": {
+    "label": "Stopping secondary prevention by 6 months",
+    "horizon_days": 180,
+    "actionability": "actionable",
+    "note": "Drives caregiver check-in frequency.",
+    "p50": 0.16058716479197813,
+    "p80": 0.22194788019826867,
+    "p95": 0.2903921690161011,
+    "train_prevalence": 0.16965640339134316
+  }
+}

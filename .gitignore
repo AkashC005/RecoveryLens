@@ -1,4 +1,33 @@
+# Python
 .venv/
+venv/
 __pycache__/
-*.pkl
+*.py[cod]
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Database — regenerated on startup, and may hold real contact details
+*.db
+*.sqlite3
+
+# Environment
 .env
+.env.local
+
+# macOS
+.DS_Store
+
+# Duplicated artifact trees. Keep ONE copy at the repo root.
+ml/outputs/
+ml/models/
+
+# --- deliberately NOT ignored ---
+# models/          runtime models, ~2.8 MB, needed by the API
+# api/artifacts/   thresholds and schema, ~24 KB
+# outputs/         reports and figures the Evidence screen reads
+# ml/data/         IST-1 and IST-3 are public data; committing them keeps the
+#                  pipeline reproducible

@@ -1,0 +1,355 @@
+{
+  "sections": [
+    {
+      "title": "Demographics",
+      "fields": [
+        {
+          "name": "age",
+          "label": "Age (years)",
+          "type": "number",
+          "min": 16,
+          "max": 110,
+          "required": true
+        },
+        {
+          "name": "sex",
+          "label": "Sex",
+          "type": "select",
+          "required": true,
+          "options": [
+            {
+              "value": "M",
+              "label": "Male"
+            },
+            {
+              "value": "F",
+              "label": "Female"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Presentation",
+      "fields": [
+        {
+          "name": "hours_since_onset",
+          "label": "Hours since symptom onset",
+          "type": "number",
+          "min": 0,
+          "max": 48,
+          "required": true
+        },
+        {
+          "name": "consciousness",
+          "label": "Level of consciousness",
+          "type": "select",
+          "required": true,
+          "options": [
+            {
+              "value": "alert",
+              "label": "Fully alert"
+            },
+            {
+              "value": "drowsy",
+              "label": "Drowsy"
+            },
+            {
+              "value": "unconscious",
+              "label": "Unconscious"
+            }
+          ]
+        },
+        {
+          "name": "systolic_bp",
+          "label": "Systolic blood pressure (mmHg)",
+          "type": "number",
+          "min": 60,
+          "max": 300,
+          "required": true
+        },
+        {
+          "name": "symptoms_on_waking",
+          "label": "Symptoms noticed on waking",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "stroke_subtype",
+          "label": "Stroke subtype (Bamford)",
+          "type": "select",
+          "required": true,
+          "options": [
+            {
+              "value": "TACS",
+              "label": "TACS \u2014 total anterior circulation"
+            },
+            {
+              "value": "PACS",
+              "label": "PACS \u2014 partial anterior circulation"
+            },
+            {
+              "value": "LACS",
+              "label": "LACS \u2014 lacunar"
+            },
+            {
+              "value": "POCS",
+              "label": "POCS \u2014 posterior circulation"
+            },
+            {
+              "value": "OTH",
+              "label": "Other / unclassified"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Neurological deficits",
+      "help": "\u2018Cannot assess\u2019 is recorded as its own value \u2014 it carries real prognostic weight and is not treated as missing.",
+      "fields": [
+        {
+          "name": "deficit_face",
+          "label": "Facial weakness",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_arm",
+          "label": "Arm or hand weakness",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_leg",
+          "label": "Leg or foot weakness",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_speech",
+          "label": "Difficulty speaking (dysphasia)",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_visual_field",
+          "label": "Visual field loss",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_visuospatial",
+          "label": "Visuospatial difficulty",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_brainstem",
+          "label": "Brainstem or cerebellar signs",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        },
+        {
+          "name": "deficit_other",
+          "label": "Other neurological deficit",
+          "type": "deficit",
+          "required": true,
+          "options": [
+            {
+              "value": "absent",
+              "label": "Absent"
+            },
+            {
+              "value": "present",
+              "label": "Present"
+            },
+            {
+              "value": "cannot_assess",
+              "label": "Cannot assess"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "History and imaging",
+      "fields": [
+        {
+          "name": "atrial_fibrillation",
+          "label": "Atrial fibrillation",
+          "type": "select",
+          "required": true,
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes"
+            },
+            {
+              "value": "no",
+              "label": "No"
+            },
+            {
+              "value": "unknown",
+              "label": "Unknown"
+            }
+          ]
+        },
+        {
+          "name": "ct_before_treatment",
+          "label": "CT performed before treatment",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "infarct_visible_on_ct",
+          "label": "Infarct visible on CT",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "heparin_last_24h",
+          "label": "Heparin in preceding 24 hours",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "aspirin_last_3days",
+          "label": "Aspirin in preceding 3 days",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "title": "Planned antithrombotic treatment",
+      "help": "Maps to the trial's randomised allocation variables.",
+      "fields": [
+        {
+          "name": "planned_aspirin",
+          "label": "Aspirin planned",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "name": "planned_heparin",
+          "label": "Heparin planned",
+          "type": "select",
+          "required": true,
+          "options": [
+            {
+              "value": "none",
+              "label": "None"
+            },
+            {
+              "value": "low",
+              "label": "Low dose"
+            },
+            {
+              "value": "medium",
+              "label": "Medium dose"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    background-color: theme("colors.ink");
+    color: theme("colors.bone");
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply font-sans text-base;
+    margin: 0;
+  }
+
+  /* Tamil needs more line-height than Latin. Without this the vertical rhythm
+     breaks the moment bilingual guidance is switched on in Sprint 4. */
+  :lang(ta) {
+    line-height: 1.85;
+  }
+
+  /* Quality floor, not a feature: focus must always be visible. This tool gets
+     used on a ward, sometimes keyboard-only, sometimes one-handed. */
+  :focus-visible {
+    outline: 2px solid theme("colors.teal");
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::placeholder {
+    color: theme("colors.muted");
+    opacity: 0.7;
+  }
+}
+
+@layer components {
+  .field-label {
+    @apply block text-sm font-medium text-muted mb-1.5;
+  }
+
+  .field-input {
+    @apply w-full rounded-md bg-slate border border-raised px-3 py-2
+           text-base text-bone transition-colors;
+  }
+
+  .field-input:hover {
+    @apply border-teal-dim;
+  }
+
+  .card {
+    @apply rounded-lg bg-slate border border-raised;
+  }
+}
+
+/* Respect the OS setting. Non-negotiable for a clinical tool — vestibular
+   disorders are common in exactly this patient population. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

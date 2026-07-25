@@ -1,0 +1,27 @@
+# Render deployment blueprint.
+#
+# Deploy: push to GitHub, then Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Two things to know about the free tier before demo day:
+#   1. The service sleeps after ~15 minutes idle. The first request after a nap
+#      takes ~30s while it wakes. Warm it up before you present.
+#   2. The filesystem is ephemeral, so SQLite resets on every redeploy. Fine for
+#      a demo; not fine for real patients.
+
+services:
+  - type: web
+    name: recoverylens-api
+    runtime: python
+    plan: free
+    region: singapore          # closest to India — lower latency for the demo
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Must match the Python that pickled the models closely enough for joblib.
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # Set this to your Vercel URL after the frontend deploys, then redeploy.
+      # Comma-separated, no trailing slash, no wildcard.
+      - key: ALLOWED_ORIGINS
+        value: "http://localhost:5173"
