@@ -15,3 +15,10 @@ pandas==2.2.3
 numpy==2.1.3
 joblib==1.4.2
 shap==0.46.0
+
+# Generation step of the clinician Q&A retriever (guidance/retrieval.py).
+# Only used when RECOVERYLENS_LLM_SYNTHESIS=1 and ANTHROPIC_API_KEY is set;
+# without both, the retriever returns passages verbatim and this is dead weight
+# (~2MB, so leaving it installed costs nothing on the 512MB tier).
+# Retrieval itself uses scikit-learn TF-IDF — no torch, no faiss.
+anthropic==0.40.0

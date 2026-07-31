@@ -1,0 +1,430 @@
+{
+  "_note": [
+    "Guidance corpus for the RecoveryLens guidance layer.",
+    "",
+    "Keys are the trigger strings emitted by Predictor._guidance() in",
+    "api/predictor.py. If you add a trigger there, you MUST add it here -",
+    "registry.py fails at import if the two sets diverge. That coupling is",
+    "deliberate: a trigger with no backing content is a silent hole in a",
+    "clinical product, and silent holes are how demos die.",
+    "",
+    "Every 'excerpt' is VERBATIM from the cited source. Nothing in this file is",
+    "written by us except the 'plain_summary' fields, which are explicitly",
+    "labelled as ours in the API response so a reader can always tell our words",
+    "from a guideline's words.",
+    "",
+    "'status' is either 'covered' or 'evidence_gap'. An evidence_gap trigger has",
+    "no excerpts because no source in sources.json makes a recommendation on it.",
+    "We render the gap honestly rather than fabricating content. See the",
+    "bleeding_warning_signs entry for the worked example."
+  ],
+
+  "triggers": {
+
+    "rehabilitation_referral": {
+      "status": "covered",
+      "label": "Rehabilitation referral",
+      "audience": "clinician",
+      "plain_summary": "This patient sits in the upper range for death or dependency at six months. Guidelines direct that rehabilitation be delivered by a specialist stroke service rather than a general ward.",
+      "entries": [
+        {
+          "id": "rehab_ng236_1_1_1",
+          "source_id": "nice_ng236",
+          "section": "1.1.1",
+          "heading": "Stroke services",
+          "excerpt": "People who need rehabilitation after stroke should receive it from a specialist stroke service: in a stroke unit and subsequently from a specialist stroke team in the community.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "rehab_isa_12",
+          "source_id": "isa_2024",
+          "section": "12.0",
+          "heading": "Stroke Rehabilitation",
+          "excerpt": "Early commencement of rehabilitation provides better outcomes for stroke survivors. In addition, rehabilitation provided in a dedicated Stroke Rehabilitation Unit has shown better outcomes than in a general ward.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf",
+          "caveat": "Section 2.0 of this document excludes rehabilitation from its stated scope. Treat as supporting context, not a formal ISA recommendation."
+        },
+        {
+          "id": "rehab_isa_12_referral",
+          "source_id": "isa_2024",
+          "section": "12.0",
+          "heading": "Stroke Rehabilitation",
+          "excerpt": "Home-based rehabilitation is being commonly practiced and can be encouraged; however, evidence in the Indian setting is needed.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf",
+          "caveat": "Section 2.0 scope exclusion applies. Note the explicit acknowledgement of an Indian evidence gap."
+        }
+      ]
+    },
+
+    "adherence_support": {
+      "status": "covered",
+      "label": "Adherence support",
+      "audience": "clinician",
+      "plain_summary": "This patient sits in the upper range for stopping secondary prevention by six months. Note that NICE NG236 lists self-management interventions after stroke as an open research question, so the guidance below is drawn from general medicines-adherence guidance rather than stroke-specific evidence.",
+      "entries": [
+        {
+          "id": "adh_cg76_1_2_1",
+          "source_id": "nice_cg76",
+          "section": "1.2.1",
+          "heading": "Assessing adherence",
+          "excerpt": "Recognise that non-adherence is common and that most patients are non-adherent sometimes. Routinely assess adherence in a non-judgemental way whenever you prescribe, dispense and review medicines.",
+          "url": "https://www.nice.org.uk/guidance/cg76/chapter/Recommendations"
+        },
+        {
+          "id": "adh_cg76_1_2_2",
+          "source_id": "nice_cg76",
+          "section": "1.2.2",
+          "heading": "Assessing adherence",
+          "excerpt": "Consider assessing non-adherence by asking the patient if they have missed any doses of medicine recently. Make it easier for them to report non-adherence by asking the question in a way that does not apportion blame.",
+          "url": "https://www.nice.org.uk/guidance/cg76/chapter/Recommendations"
+        },
+        {
+          "id": "adh_cg76_1_2_4",
+          "source_id": "nice_cg76",
+          "section": "1.2.4",
+          "heading": "Interventions to increase adherence",
+          "excerpt": "If a patient is not taking their medicines, discuss with them whether this is because of beliefs and concerns or problems about the medicines (intentional non-adherence) or because of practical problems (unintentional non-adherence).",
+          "url": "https://www.nice.org.uk/guidance/cg76/chapter/Recommendations"
+        },
+        {
+          "id": "adh_cg76_1_2_5",
+          "source_id": "nice_cg76",
+          "section": "1.2.5",
+          "heading": "Interventions to increase adherence",
+          "excerpt": "Be aware that although adherence can be improved, no specific intervention can be recommended for all patients. Tailor any intervention to increase adherence to the specific difficulties with adherence the patient is experiencing.",
+          "url": "https://www.nice.org.uk/guidance/cg76/chapter/Recommendations"
+        },
+        {
+          "id": "adh_ng236_1_2_medreview",
+          "source_id": "nice_ng236",
+          "section": "1.2",
+          "heading": "Planning and delivering stroke rehabilitation",
+          "excerpt": "medication needs (including the person's ability to manage their prescribed medicines and any support they need to do so)",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "Extracted from a bulleted assessment list, not a standalone recommendation sentence.",
+          "retrieval_weight": 0.6
+        },
+        {
+          "id": "adh_isa_13_lifestyle",
+          "source_id": "isa_2024",
+          "section": "13.0",
+          "heading": "Secondary Prevention",
+          "excerpt": "Long-term management of lifestyle risk factors and adherence to recommended medications (particularly in relation to the management of hypertension, cholesterol, and diabetes), carotid artery surgery and antiplatelet therapies are essential for effective secondary stroke prevention.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        }
+      ],
+      "evidence_note": "NICE NG236 research recommendation 10 asks: 'What is the clinical and cost effectiveness of self-management interventions for people after stroke?' NICE made no practice recommendation on stroke self-management because the evidence was judged insufficient. RecoveryLens predicts risk in a space where guidelines openly acknowledge they do not yet know which intervention works. This is stated plainly rather than papered over."
+    },
+
+    "bleeding_warning_signs": {
+      "status": "evidence_gap",
+      "label": "Bleeding warning signs",
+      "audience": "clinician",
+      "plain_summary": "No source in our verified corpus makes a patient-facing recommendation on recognising bleeding after discharge. We are not going to invent one.",
+      "entries": [],
+      "evidence_note": "Assessed and not found: ISA 2024 discusses bleeding only as in-hospital monitoring after IV rtPA and as a risk of early anticoagulation (sections 10 and 11); NICE NG236 is a rehabilitation guideline and does not cover antithrombotic safety; NICE NG128 stops at 48 hours. Note also that the underlying haemorrhage_14d model is labelled 'vigilance' in thresholds.json, with net benefit confined to very low thresholds and only 120 training events (EPV 5.6). Manufacturing patient-facing bleeding advice to fill this gap would compound a weak model with an unsourced claim. RESOLUTION OPTIONS, in order of preference: (1) source from a dedicated antithrombotic-safety document such as NICE NG196 or the relevant BNF/MHRA patient advice and add it to sources.json; (2) restrict this trigger to a clinician-only prompt to review antithrombotic choice, with no patient-facing text; (3) retire the trigger from Predictor._guidance(). Do not resolve it by writing content."
+    },
+
+    "close_monitoring": {
+      "status": "covered",
+      "label": "Close monitoring",
+      "audience": "clinician",
+      "plain_summary": "This patient is in the top tier for 14-day mortality. The sources below establish that early deterioration is common and that families should be equipped to recognise complications.",
+      "entries": [
+        {
+          "id": "mon_isa_11",
+          "source_id": "isa_2024",
+          "section": "11.0",
+          "heading": "Treatment of Acute Neurological Complications",
+          "excerpt": "Clinical deterioration can occur in 25% of patients after initial stroke assessment.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        },
+        {
+          "id": "mon_ng236_1_17_2",
+          "source_id": "nice_ng236",
+          "section": "1.17.2",
+          "heading": "Long-term health and social support",
+          "excerpt": "Provide information so that people after stroke, and their family and carers, can recognise the complications of the condition, including frequent falls, spasticity, shoulder pain and incontinence.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        }
+      ],
+      "evidence_note": "Partial coverage. The ISA material is framed around the acute inpatient phase, not the post-discharge window this trigger fires in. It is included because it establishes the base rate that justifies closer follow-up, not because it prescribes post-discharge monitoring."
+    },
+
+    "speech_and_swallowing": {
+      "status": "covered",
+      "label": "Speech and swallowing",
+      "audience": "clinician",
+      "plain_summary": "Speech deficit was recorded at assessment. Guidelines set a 72-hour screening window for communication difficulties and require dysphagia information for families.",
+      "entries": [
+        {
+          "id": "sw_ng236_1_12_1",
+          "source_id": "nice_ng236",
+          "section": "1.12.1",
+          "heading": "Communication",
+          "excerpt": "Screen people for communication difficulties within 72 hours of onset of stroke symptoms.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "sw_ng236_1_12_3",
+          "source_id": "nice_ng236",
+          "section": "1.12.3",
+          "heading": "Communication",
+          "excerpt": "Refer people with suspected communication difficulties after stroke to a speech and language therapist for detailed analysis of any impairments and assessment of their impact.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "sw_ng236_1_11_2",
+          "source_id": "nice_ng236",
+          "section": "1.11.2",
+          "heading": "Swallowing",
+          "excerpt": "Provide information to people with dysphagia (difficulty in swallowing) after stroke, and their families and carers, on what the condition is and its risks.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "sw_ng236_1_11_3",
+          "source_id": "nice_ng236",
+          "section": "1.11.3",
+          "heading": "Swallowing",
+          "excerpt": "Give families and carers information on how they can help someone who is coughing or choking while eating or drinking.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "sw_ng236_1_11_4",
+          "source_id": "nice_ng236",
+          "section": "1.11.4",
+          "heading": "Swallowing",
+          "excerpt": "If the person has dysphagia and is unable to take tablets, review the need for the medication and, if it is still needed, change either its formulation or the route of administration.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "Cross-cutting: this recommendation links swallowing impairment directly to the adherence_support pathway."
+        },
+        {
+          "id": "sw_isa_swallow_screen",
+          "source_id": "isa_2024",
+          "section": "9.0",
+          "heading": "Dysphagia assessment",
+          "excerpt": "All patients irrespective of the stroke severity should be assessed optimally for ability to swallow before they are allowed to eat or drink. A validated swallow screen tool should be applied.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        }
+      ]
+    },
+
+    "arm_rehabilitation": {
+      "status": "covered",
+      "label": "Arm rehabilitation",
+      "audience": "clinician",
+      "plain_summary": "Arm deficit was recorded at assessment. Note that two of the recommendations below are negative - they tell you what not to offer.",
+      "entries": [
+        {
+          "id": "arm_ng236_1_13_1",
+          "source_id": "nice_ng236",
+          "section": "1.13.1",
+          "heading": "Movement",
+          "excerpt": "Provide physiotherapy for people after stroke who have weakness in their trunk or upper or lower limbs, sensory disturbance or balance difficulties that affect their movement.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "arm_ng236_1_13_20",
+          "source_id": "nice_ng236",
+          "section": "1.13.20",
+          "heading": "Repetitive task training",
+          "excerpt": "Offer people after stroke repetitive task training on a range of activities for upper limb weakness (such as tasks that involve reaching, grasping, pointing, moving and manipulating objects).",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "arm_ng236_1_13_19",
+          "source_id": "nice_ng236",
+          "section": "1.13.19",
+          "heading": "Constraint-induced movement therapy",
+          "excerpt": "Consider constraint-induced movement therapy for people after stroke who have movement of 20 degrees of wrist extension and 10 degrees of finger extension. Be aware of potential adverse events (such as falls, low mood and fatigue).",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "arm_ng236_1_13_10",
+          "source_id": "nice_ng236",
+          "section": "1.13.10",
+          "heading": "Wrist and hand splints",
+          "excerpt": "Do not routinely offer wrist and hand splints to people with upper limb weakness after stroke.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "Negative recommendation - guidance against an intervention."
+        },
+        {
+          "id": "arm_ng236_robot",
+          "source_id": "nice_ng236",
+          "section": "1.13.18",
+          "heading": "Robot-assisted arm training",
+          "excerpt": "Do not offer robot-assisted arm training as part of an upper limb rehabilitation programme.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "Negative recommendation - guidance against an intervention. Section number inferred from document ordering; verify against the published PDF before clinical use."
+        }
+      ]
+    },
+
+    "mobility_and_falls": {
+      "status": "covered",
+      "label": "Mobility and falls",
+      "audience": "clinician",
+      "plain_summary": "Leg deficit was recorded at assessment. Falls appear in the guidance both as a complication to watch for and as an adverse event of one arm-rehabilitation therapy.",
+      "entries": [
+        {
+          "id": "mob_ng236_1_13_21",
+          "source_id": "nice_ng236",
+          "section": "1.13.21",
+          "heading": "Walking therapies and group circuit training",
+          "excerpt": "Offer walking training to people after stroke who are able to walk, with or without assistance, to help them build endurance and move more quickly.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_23",
+          "source_id": "nice_ng236",
+          "section": "1.13.23",
+          "heading": "Walking therapies and group circuit training",
+          "excerpt": "consider a programme of group circuit training that includes an educational element (for example, advice on preventing falls) and involves interaction with other participants to create an environment of peer support.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_17_2",
+          "source_id": "nice_ng236",
+          "section": "1.17.2",
+          "heading": "Long-term health and social support",
+          "excerpt": "Provide information so that people after stroke, and their family and carers, can recognise the complications of the condition, including frequent falls, spasticity, shoulder pain and incontinence.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_4",
+          "source_id": "nice_ng236",
+          "section": "1.13.4",
+          "heading": "Strength training",
+          "excerpt": "Consider strength training for people with muscle weakness after stroke. This could include progressive strength building through increasing repetitions of body weight activities (for example, sit-to-stand repetitions).",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_5",
+          "source_id": "nice_ng236",
+          "section": "1.13.5",
+          "heading": "Fitness training",
+          "excerpt": "Encourage people to participate in physical activity after stroke.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_6",
+          "source_id": "nice_ng236",
+          "section": "1.13.6",
+          "heading": "Fitness training",
+          "excerpt": "Assess people who are able to walk and are medically stable after stroke for cardiorespiratory and resistance training that is appropriate to their individual goals.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_8",
+          "source_id": "nice_ng236",
+          "section": "1.13.8",
+          "heading": "Fitness training",
+          "excerpt": "If people after stroke choose to continue with an exercise programme independently, ensure physiotherapists supply any necessary information about interventions and adaptations to the provider so they can make sure the programme is safe for the person and tailored to their needs and goals.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "mob_ng236_1_13_9",
+          "source_id": "nice_ng236",
+          "section": "1.13.9",
+          "heading": "Fitness training",
+          "excerpt": "Tell people who are participating in fitness activities after stroke about common, potential problems, such as shoulder pain, and advise them to seek advice from their GP or therapist if these occur.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        }
+      ],
+      "evidence_note": "NG236 addresses falls as a complication to recognise and as an adverse event of constraint-induced movement therapy. It does not contain a dedicated falls-prevention protocol; NICE covers that in a separate guideline (CG161) which is not in this corpus."
+    },
+
+    "visual_field_safety": {
+      "status": "covered",
+      "label": "Visual field safety",
+      "audience": "clinician",
+      "plain_summary": "Visual field deficit was recorded at assessment. The driving recommendation is the one most often missed at discharge.",
+      "entries": [
+        {
+          "id": "vis_ng236_1_8_1",
+          "source_id": "nice_ng236",
+          "section": "1.8.1",
+          "heading": "Vision",
+          "excerpt": "Offer people who are in hospital after stroke a specialist orthoptist assessment as soon as possible. If this cannot be done before discharge, offer the person an urgent outpatient appointment.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "vis_ng236_1_8_2",
+          "source_id": "nice_ng236",
+          "section": "1.8.2",
+          "heading": "Vision",
+          "excerpt": "Offer eye movement therapy to people who have persisting hemianopia (blindness in 1 half of the visual field of 1 or both eyes) after stroke.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "vis_ng236_1_8_3",
+          "source_id": "nice_ng236",
+          "section": "1.8.3",
+          "heading": "Vision",
+          "excerpt": "When advising people with visual problems after stroke about driving, consult the Driver and Vehicle Licensing Agency (DVLA) regulations.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "DVLA is the UK licensing authority. For an Indian deployment the equivalent authority is the state Regional Transport Office under the Motor Vehicles Act; we have no verified Indian source for post-stroke driving criteria, so this is shown as a UK reference only."
+        },
+        {
+          "id": "vis_ng236_neglect",
+          "source_id": "nice_ng236",
+          "section": "1.5",
+          "heading": "Cognitive functioning",
+          "excerpt": "interventions to help people scan to the neglected side of their visual field, such as brightly coloured lines or highlighter on the edge of the page",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations",
+          "caveat": "Extracted from a bulleted list under spatial neglect, not a standalone recommendation sentence.",
+          "retrieval_weight": 0.6
+        }
+      ]
+    },
+
+    "general_recovery": {
+      "status": "covered",
+      "label": "General recovery",
+      "audience": "caregiver",
+      "plain_summary": "Shown for every patient. The six-month review point below is what the follow-up schedule in this product is built around.",
+      "entries": [
+        {
+          "id": "gen_ng236_1_17_5",
+          "source_id": "nice_ng236",
+          "section": "1.17.5",
+          "heading": "Long-term health and social support",
+          "excerpt": "Review the health and social care needs of people after stroke, and the needs of their carers, at 6 months and then annually. These reviews should cover participation in activities of everyday life to ensure that people's goals are met.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "gen_ng236_1_17_1",
+          "source_id": "nice_ng236",
+          "section": "1.17.1",
+          "heading": "Long-term health and social support",
+          "excerpt": "Explain to people after stroke that they can self-refer, usually with the support from a health or care professional working in primary care, if they need further help or support.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "gen_ng236_1_17_3",
+          "source_id": "nice_ng236",
+          "section": "1.17.3",
+          "heading": "Long-term health and social support",
+          "excerpt": "Encourage people to focus on life after stroke and help them to achieve their goals. This may include helping them to participate in community activities, and supporting their social roles.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "gen_isa_lifestyle",
+          "source_id": "isa_2024",
+          "section": "13.0",
+          "heading": "Lifestyle Measures",
+          "excerpt": "The following lifestyle measures can aid in timely recovery as well as secondary prevention of stroke: regular exercise; smoking cessation and avoiding environmental smoke; no alcohol or remaining within safe drinking limits; effective weight loss; reduction of salt intake.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        },
+        {
+          "id": "gen_isa_riskfactor_week",
+          "source_id": "isa_2024",
+          "section": "13.0",
+          "heading": "Secondary Prevention",
+          "excerpt": "The following risk factors should be evaluated within one week of the onset of acute phase: hypertension; diabetes mellitus; smoking; carotid artery stenosis; atrial fibrillation or other arrhythmias; structural cardiac disease.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        }
+      ]
+    }
+  }
+}

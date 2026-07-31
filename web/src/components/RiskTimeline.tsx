@@ -16,6 +16,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import type { AssessmentResponse, RiskResult } from "../lib/api";
 import { TIER_LABEL, TIER_STYLES } from "../lib/api";
+import GuidancePanel from "./GuidancePanel";
 
 interface TimelineEvent {
   day: number;
@@ -174,24 +175,12 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
         </ol>
       </div>
 
-      {result.guidance_triggers.length > 0 && (
-        <div className="mt-8 card p-4">
-          <h3 className="text-sm font-medium text-bone">Guidance to prepare</h3>
-          <p className="text-xs text-muted mt-1">
-            Content categories the guidance layer will retrieve for this patient.
-          </p>
-          <ul className="mt-3 flex flex-wrap gap-2">
-            {result.guidance_triggers.map((t) => (
-              <li
-                key={t}
-                className="rounded-full border border-teal-dim px-3 py-1 text-xs text-teal"
-              >
-                {t.replace(/_/g, " ")}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* Previously this rendered `guidance_triggers` as bare chips — category
+          labels with nothing behind them. The API now returns the cited guideline
+          text itself, so the chips are replaced by the real content. Falls back
+          to nothing rather than to chips: a label with no content is a promise
+          the product cannot keep. */}
+      {result.guidance && <GuidancePanel bundle={result.guidance} />}
 
       <p className="mt-6 text-xs text-muted/80 max-w-prose">{result.disclaimer}</p>
     </section>

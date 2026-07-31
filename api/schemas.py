@@ -152,6 +152,105 @@ class CheckInPlan(BaseModel):
     reason: str
 
 
+# --------------------------------------------------------------------- guidance
+class GuidanceSourceRef(BaseModel):
+    """Provenance for a single excerpt. Every field here exists so a reader can
+    independently verify the quote against the published document."""
+    id: str
+    tier: Literal["primary", "fallback"]
+    short_title: str
+    title: str
+    publisher: str
+    published: str = ""
+    jurisdiction: str = ""
+    retrieved: str = ""
+    scope_caveat: str = ""
+
+
+class GuidanceEntry(BaseModel):
+    id: str
+    section: str = Field(..., description="Recommendation or section number in the source.")
+    heading: str = ""
+    excerpt: str = Field(
+        ..., description="VERBATIM from the source. Never generated, never paraphrased.")
+    caveat: str | None = Field(
+        None, description="Limitation on how this excerpt should be read.")
+    url: str
+    source: GuidanceSourceRef
+
+
+class GuidanceBlock(BaseModel):
+    trigger: str
+    label: str
+    status: Literal["covered", "evidence_gap"] = Field(
+        ..., description="'evidence_gap' means no verified source makes a "
+                         "recommendation here. Entries will be empty by design.")
+    audience: Literal["clinician", "caregiver"]
+    plain_summary: str
+    plain_summary_is_authored_by_recoverylens: bool = Field(
+        True, description="Always true. The UI must render plain_summary visually "
+                          "distinct from excerpts so guideline text is never "
+                          "confused with ours.")
+    evidence_note: str | None = None
+    entries: list[GuidanceEntry]
+    entry_count: int
+
+
+class GuidanceSourceListing(BaseModel):
+    id: str
+    short_title: str
+    title: str
+    publisher: str
+    url: str
+    tier: str
+    published: str = ""
+    jurisdiction: str = ""
+    licence_note: str = ""
+
+
+class GuidanceBundle(BaseModel):
+    guidance: list[GuidanceBlock]
+    unresolved_triggers: list[str] = Field(
+        ..., description="Triggers the predictor emitted that the corpus cannot "
+                         "resolve. Should always be empty; non-empty means the "
+                         "predictor and corpus have drifted apart.")
+    evidence_gaps: list[str]
+    sources_cited: list[GuidanceSourceListing]
+    retrieval_method: Literal["deterministic_lookup"]
+    disclaimer: str
+
+
+class GuidanceQuestion(BaseModel):
+    question: str = Field(..., min_length=3, max_length=500)
+    top_k: int = Field(4, ge=1, le=8)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"question": "Are wrist splints recommended after stroke?"}
+        }
+    }
+
+
+class RetrievedPassage(GuidanceEntry):
+    trigger: str
+    relevance: float = Field(
+        ..., description="Ranking score after length and fragment priors.")
+    cosine: float = Field(..., description="Raw TF-IDF cosine, before priors.")
+
+
+class GuidanceAnswer(BaseModel):
+    question: str
+    answered: bool = Field(
+        ..., description="False means nothing cleared the relevance floor. The "
+                         "retriever declines rather than returning its best guess.")
+    mode: Literal["extractive", "synthesised", "refusal"]
+    answer: str
+    passages: list[RetrievedPassage]
+    sources_cited: list[GuidanceSourceListing]
+    related_evidence_gaps: list[str] = []
+    disclaimer: str
+
+
 class AssessmentResponse(BaseModel):
     assessment_id: int
     patient_id: int
@@ -164,6 +263,9 @@ class AssessmentResponse(BaseModel):
     risks: list[RiskResult]
     guidance_triggers: list[str] = Field(
         ..., description="Content categories for the guidance layer to retrieve.")
+    guidance: GuidanceBundle = Field(
+        ..., description="Cited guideline text for each trigger, resolved by "
+                         "deterministic lookup. Nothing here is generated.")
     followup_plan: list[CheckInPlan]
     disclaimer: str
 

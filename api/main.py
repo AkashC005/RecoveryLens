@@ -18,10 +18,13 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from guidance import UnknownTrigger, get_retriever, guidance_registry
+
 from .database import Assessment, CheckIn, Patient, get_db, init_db, utcnow
 from .predictor import predictor
 from .schemas import (AssessmentRequest, AssessmentResponse, CheckInResponse,
-                      CheckInSubmission, PatientSummary)
+                      CheckInSubmission, GuidanceAnswer, GuidanceBlock,
+                      GuidanceBundle, GuidanceQuestion, PatientSummary)
 
 app = FastAPI(
     title="RecoveryLens API",
@@ -50,7 +53,18 @@ app.add_middleware(
 def startup() -> None:
     init_db()
     predictor.load()
-    print(f"Loaded {len(predictor.models)} models. Ready.")
+
+    # The corpus already self-validated on import. This second check catches the
+    # other direction of drift: a trigger added to Predictor._guidance() that has
+    # no backing content. Failing here beats discovering it when someone clicks
+    # the chip during a demo.
+    coverage = guidance_registry.coverage_report()
+    print(f"Loaded {len(predictor.models)} models. "
+          f"Guidance corpus: {coverage['coverage']} triggers covered, "
+          f"{coverage['total_entries']} cited entries.")
+    if coverage["evidence_gaps"]:
+        print(f"  Documented evidence gaps: {', '.join(coverage['evidence_gaps'])}")
+    print("Ready.")
 
 
 # --------------------------------------------------------------------------- meta
@@ -74,6 +88,55 @@ def form_schema():
 def model_metrics():
     """Performance figures for the Evidence screen."""
     return predictor.metrics
+
+
+# --------------------------------------------------------------------------- guidance
+@app.get("/api/guidance", tags=["guidance"])
+def guidance_coverage():
+    """Corpus coverage, sources used, and sources assessed then rejected.
+
+    This backs the Evidence screen. Publishing what we rejected and why is the
+    point — it is the difference between a curated corpus and an arbitrary one.
+    """
+    return guidance_registry.coverage_report()
+
+
+@app.get("/api/guidance/{trigger}", response_model=GuidanceBlock, tags=["guidance"])
+def guidance_for_trigger(trigger: str):
+    """Cited guideline text for one trigger.
+
+    A trigger with status 'evidence_gap' returns 200 with an empty entry list and
+    an evidence_note. That is a real answer, not an error: it says no verified
+    source makes a recommendation here.
+    """
+    try:
+        return guidance_registry.get(trigger)
+    except UnknownTrigger:
+        raise HTTPException(
+            404, f"Unknown guidance trigger '{trigger}'. "
+                 f"Known triggers: {sorted(guidance_registry.triggers)}")
+
+
+@app.post("/api/guidance/resolve", response_model=GuidanceBundle, tags=["guidance"])
+def resolve_guidance(triggers: list[str]):
+    """Resolve a list of triggers in one call — for re-rendering a stored
+    assessment without re-running the models."""
+    return guidance_registry.for_assessment(triggers)
+
+
+@app.post("/api/guidance/ask", response_model=GuidanceAnswer, tags=["guidance"])
+def ask_guidance(q: GuidanceQuestion):
+    """Clinician Q&A over the guidance corpus.
+
+    This is the retrieval surface, and it is clinician-facing by design. A
+    question with no sufficiently relevant passage returns `answered: false`
+    rather than a best guess — see the note in guidance/retrieval.py on why
+    refusal is the correct behaviour for a clinical retriever.
+
+    Not for patient use: patient-facing content goes through the deterministic
+    path above, which cannot generate text.
+    """
+    return get_retriever().ask(q.question, top_k=q.top_k)
 
 
 # --------------------------------------------------------------------------- assess
@@ -136,6 +199,10 @@ def _run_assessment(req: AssessmentRequest, db: Session,
         patient_created=created,
         assessment_number=len(patient.assessments),
         created_at=assessment.created_at,
+        # Resolved at response time, not persisted. The corpus is versioned in
+        # git; freezing a copy into every assessment row would mean a guideline
+        # correction never reaches records already written.
+        guidance=guidance_registry.for_assessment(result["guidance_triggers"]),
         **result,
     )
 

@@ -70,12 +70,93 @@ export interface CheckInPlan {
   reason: string;
 }
 
+// ------------------------------------------------------------------ guidance
+export type GuidanceStatus = "covered" | "evidence_gap";
+export type SourceTier = "primary" | "fallback";
+
+export interface GuidanceSourceRef {
+  id: string;
+  tier: SourceTier;
+  short_title: string;
+  title: string;
+  publisher: string;
+  published: string;
+  jurisdiction: string;
+  retrieved: string;
+  scope_caveat: string;
+}
+
+export interface GuidanceEntry {
+  id: string;
+  /** Recommendation number in the source, e.g. "1.13.10". */
+  section: string;
+  heading: string;
+  /** VERBATIM guideline text. Must never be rendered as RecoveryLens's words. */
+  excerpt: string;
+  caveat: string | null;
+  url: string;
+  source: GuidanceSourceRef;
+}
+
+export interface GuidanceBlock {
+  trigger: string;
+  label: string;
+  status: GuidanceStatus;
+  audience: "clinician" | "caregiver";
+  /** OUR wording, not a guideline's. Render it visually distinct from excerpts. */
+  plain_summary: string;
+  plain_summary_is_authored_by_recoverylens: boolean;
+  evidence_note: string | null;
+  entries: GuidanceEntry[];
+  entry_count: number;
+}
+
+export interface GuidanceSourceListing {
+  id: string;
+  short_title: string;
+  title: string;
+  publisher: string;
+  url: string;
+  tier: SourceTier;
+  published: string;
+  jurisdiction: string;
+  licence_note: string;
+}
+
+export interface GuidanceBundle {
+  guidance: GuidanceBlock[];
+  unresolved_triggers: string[];
+  evidence_gaps: string[];
+  sources_cited: GuidanceSourceListing[];
+  retrieval_method: "deterministic_lookup";
+  disclaimer: string;
+}
+
+export interface RetrievedPassage extends GuidanceEntry {
+  trigger: string;
+  relevance: number;
+  cosine: number;
+}
+
+export interface GuidanceAnswer {
+  question: string;
+  /** False = nothing cleared the relevance floor. The retriever declined. */
+  answered: boolean;
+  mode: "extractive" | "synthesised" | "refusal";
+  answer: string;
+  passages: RetrievedPassage[];
+  sources_cited: GuidanceSourceListing[];
+  related_evidence_gaps: string[];
+  disclaimer: string;
+}
+
 export interface AssessmentResponse {
   assessment_id: number;
   patient_id: number;
   created_at: string;
   risks: RiskResult[];
   guidance_triggers: string[];
+  guidance: GuidanceBundle;
   followup_plan: CheckInPlan[];
   disclaimer: string;
 }
@@ -119,6 +200,16 @@ export const api = {
   patients: () => request<PatientSummary[]>("/api/patients"),
 
   metrics: () => request<Record<string, unknown>>("/api/meta/metrics"),
+
+  /** Clinician Q&A over the guidance corpus. May legitimately decline. */
+  askGuidance: (question: string, top_k = 4) =>
+    request<GuidanceAnswer>("/api/guidance/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, top_k }),
+    }),
+
+  /** Corpus coverage + sources used and rejected. Backs the Evidence screen. */
+  guidanceCoverage: () => request<Record<string, unknown>>("/api/guidance"),
 };
 
 // -------------------------------------------------------------------- tokens
