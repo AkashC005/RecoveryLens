@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from guidance import UnknownTrigger, get_retriever, guidance_registry
+from guidance.followup import planner as followup_planner
 
 from .database import Assessment, CheckIn, Patient, get_db, init_db, utcnow
 from .predictor import predictor
@@ -64,6 +65,12 @@ def startup() -> None:
           f"{coverage['total_entries']} cited entries.")
     if coverage["evidence_gaps"]:
         print(f"  Documented evidence gaps: {', '.join(coverage['evidence_gaps'])}")
+
+    fu = followup_planner.coverage_report()
+    print(f"  Follow-up intervals: {fu['guideline_backed']} guideline-backed, "
+          f"{fu['total_citations']} citations. "
+          f"Operational: {fu['by_basis']['operational']}. "
+          f"Trial convention: {fu['by_basis']['trial_convention']}.")
     print("Ready.")
 
 
@@ -203,6 +210,11 @@ def _run_assessment(req: AssessmentRequest, db: Session,
         # git; freezing a copy into every assessment row would mean a guideline
         # correction never reaches records already written.
         guidance=guidance_registry.for_assessment(result["guidance_triggers"]),
+        # Days come from result["followup_plan"] unchanged. The planner only
+        # annotates them with evidence and narratives — it never adds, removes
+        # or moves a check-in.
+        timeline=followup_planner.build(
+            result["followup_plan"], result["guidance_triggers"], result["risks"]),
         **result,
     )
 

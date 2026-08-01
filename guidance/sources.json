@@ -63,6 +63,20 @@
       "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
     },
 
+    "ncgs_2023": {
+      "id": "ncgs_2023",
+      "tier": "fallback",
+      "title": "National Clinical Guideline for Stroke for the United Kingdom and Ireland",
+      "short_title": "NCGS 2023",
+      "publisher": "Intercollegiate Stroke Working Party / Royal College of Physicians",
+      "published": "2023",
+      "url": "https://www.strokeguideline.org/",
+      "retrieved": "2026-07-31",
+      "jurisdiction": "UK/IE",
+      "scope_caveat": "Added specifically to source follow-up cadence, which NICE NG236 and the ISA statement barely address. Recommendations carry their own year tags ([2016], [2023]) indicating when each was last reviewed; these are preserved in the excerpts. Section numbers here refer to chapters rather than numbered recommendations, because the web edition does not surface recommendation numbers - verify against the PDF before publication.",
+      "licence_note": "Freely accessible at strokeguideline.org. Short attributed excerpts only, with deep link."
+    },
+
     "nice_ng128": {
       "id": "nice_ng128",
       "tier": "fallback",

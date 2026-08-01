@@ -150,6 +150,32 @@ export interface GuidanceAnswer {
   disclaimer: string;
 }
 
+/** Provenance of the check-in INTERVAL itself — not of the guidance text. */
+export type IntervalBasis =
+  | "guideline"          // a published recommendation names this interval
+  | "trial_convention"   // a research endpoint, not a care recommendation
+  | "operational"        // our scheduling choice, no external backing
+  | "unregistered";      // scheduled but missing from the evidence file — a bug
+
+export interface CheckInCitation extends GuidanceEntry {
+  source_id: string;
+}
+
+export interface EnrichedCheckIn {
+  /** Deterministic. Set by rules, never by a model. */
+  day: number;
+  label: string;
+  reason: string;
+  basis: IntervalBasis;
+  basis_explained: string;
+  citations: CheckInCitation[];
+  passages: RetrievedPassage[];
+  evidence_note: string | null;
+  clinician_note: string;
+  caregiver_message: string;
+  narrative_mode: "synthesised" | "static";
+}
+
 export interface AssessmentResponse {
   assessment_id: number;
   patient_id: number;
@@ -158,8 +184,19 @@ export interface AssessmentResponse {
   guidance_triggers: string[];
   guidance: GuidanceBundle;
   followup_plan: CheckInPlan[];
+  timeline: EnrichedCheckIn[];
   disclaimer: string;
 }
+
+/** Label + styling per basis. `operational` and `trial_convention` deliberately
+ *  look different from `guideline` — the whole point is that a reader can tell
+ *  at a glance which check-ins carry published backing and which are ours. */
+export const BASIS_META: Record<IntervalBasis, { label: string; className: string }> = {
+  guideline:        { label: "Guideline-backed", className: "border-teal-dim text-teal" },
+  trial_convention: { label: "Trial convention", className: "border-raised text-muted" },
+  operational:      { label: "Our scheduling",   className: "border-raised text-muted" },
+  unregistered:     { label: "Unregistered",     className: "border-signal/50 text-signal" },
+};
 
 export interface PatientSummary {
   id: number;

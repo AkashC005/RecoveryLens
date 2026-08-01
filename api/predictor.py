@@ -227,30 +227,35 @@ class Predictor:
     def _followup(risks: list[dict]) -> list[dict]:
         """Check-in schedule.
 
-        Intervals follow published post-stroke follow-up practice rather than
-        being chosen arbitrarily:
-          day 7  - early complication window
-          day 14 - guideline-recommended post-discharge review to check workup
-                   and secondary prevention
-          day 30 - monthly telephone contact, as used in nurse-led follow-up trials
-          day 90 - 3-month structured review, the established assessment point
+        The days are DETERMINISTIC and are never chosen by a model. Two identical
+        patients must receive an identical schedule.
 
-        What is ours, not guideline: the *adaptation*. Patients predicted at high
-        risk of stopping secondary prevention get an extra early contact and an
-        extension to the 6-month horizon the model predicts to.
+        Provenance for each interval lives in guidance/followup.json, which is
+        the single source of truth for whether a day is guideline-backed or ours.
+        Do not restate a justification here — it will drift from the evidence file.
+
+        A previous version of this docstring claimed day 14 was a
+        "guideline-recommended post-discharge review" and day 30 followed
+        "nurse-led follow-up trials". Neither claim could be sourced from any
+        guideline in the corpus (NICE NG236, NG128, CG76, ISA 2024, NCGS 2023),
+        and the day-14 reason string asserted guideline authority in the API
+        response itself. Both are now labelled 'operational' in followup.json.
+        Day 42 was added because 4-6 weeks IS cited, twice, and was missing.
         """
         by = {r["outcome"]: r for r in risks}
         plan = [
-            {"day": 7,  "reason": "Early complication window"},
-            {"day": 14, "reason": "Guideline-recommended post-discharge review"},
-            {"day": 30, "reason": "One month — medication routine and recovery"},
-            {"day": 90, "reason": "Three-month structured review"},
+            {"day": 7,  "reason": "One-week review"},
+            {"day": 14, "reason": "Two-week check-in"},
+            {"day": 30, "reason": "One-month contact"},
+            {"day": 42, "reason": "Six-week review"},
+            {"day": 90, "reason": "Three-month outcome point"},
         ]
+        # The adaptation is ours, not guideline: patients predicted at elevated
+        # risk of stopping secondary prevention get an extra early contact and an
+        # extension to the 6-month horizon the model predicts to.
         if by["nonadherence_6m"]["tier"] in {"elevated", "high"}:
-            plan.insert(0, {"day": 3,
-                            "reason": "Elevated risk of stopping secondary prevention"})
-            plan.append({"day": 180,
-                         "reason": "Six-month check — matches the model's horizon"})
+            plan.insert(0, {"day": 3, "reason": "Early contact"})
+            plan.append({"day": 180, "reason": "Six-month structured review"})
         return sorted(plan, key=lambda p: p["day"])
 
 

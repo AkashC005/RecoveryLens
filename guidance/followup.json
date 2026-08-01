@@ -1,0 +1,142 @@
+{
+  "_note": [
+    "Evidence behind each follow-up check-in day.",
+    "",
+    "SEPARATION OF CONCERNS, and it matters clinically:",
+    "  api/predictor.py::_followup()  decides WHICH days a patient gets.",
+    "  this file                      supplies WHY each day exists.",
+    "",
+    "The days stay deterministic and are never chosen by a model. Two identical",
+    "patients must receive an identical schedule - a follow-up plan that varies",
+    "run to run is unauditable, and an invented interval means a missed clinical",
+    "window. Only the justification and the narrative around it are retrieved.",
+    "",
+    "'basis' is the honest provenance of the interval:",
+    "  guideline        - a published recommendation names this interval",
+    "  trial_convention - established in research practice, not a care guideline",
+    "  operational      - our own service-design choice, no external backing",
+    "",
+    "An 'operational' day is not illegitimate; it is unattributed. Labelling it",
+    "as such is the difference between a defensible schedule and one that quietly",
+    "implies guideline authority it does not have. Day 14 previously carried the",
+    "label 'Guideline-recommended post-discharge review' while no guideline in our",
+    "corpus recommends it. That claim is removed here."
+  ],
+
+  "intervals": {
+    "3": {
+      "day": 3,
+      "label": "Early contact",
+      "basis": "guideline",
+      "reason": "Earliest window in which a patient discharged home should already be receiving support.",
+      "entries": [
+        {
+          "id": "fu_ncgs_esd_24h",
+          "source_id": "ncgs_2023",
+          "section": "2.11 Early supported discharge",
+          "heading": "Early supported discharge",
+          "excerpt": "Hospital inpatients with stroke who have mild to moderate disability should be offered early supported discharge, with treatment at home beginning within 24 hours of discharge.",
+          "url": "https://www.strokeguideline.org/chapter/organisation-of-stroke-services/",
+          "caveat": "Recommendation tagged [2023]. Supports contact within the first days after discharge; it does not name day 3 specifically."
+        }
+      ]
+    },
+
+    "7": {
+      "day": 7,
+      "label": "One-week review",
+      "basis": "guideline",
+      "reason": "Guidelines place risk-factor evaluation inside the first week.",
+      "entries": [
+        {
+          "id": "fu_isa_one_week",
+          "source_id": "isa_2024",
+          "section": "13.0",
+          "heading": "Secondary Prevention",
+          "excerpt": "The following risk factors should be evaluated within one week of the onset of acute phase: hypertension; diabetes mellitus; smoking; carotid artery stenosis; atrial fibrillation or other arrhythmias; structural cardiac disease.",
+          "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf"
+        }
+      ]
+    },
+
+    "14": {
+      "day": 14,
+      "label": "Two-week check-in",
+      "basis": "operational",
+      "reason": "Bridges the one-week risk-factor review and the six-week guideline review. Chosen by us, not recommended by any source in the corpus.",
+      "entries": [],
+      "evidence_note": "No source in guidance/sources.json recommends a 14-day post-discharge review. Searched: NICE NG236, NICE NG128, ISA 2024, NCGS 2023. This day previously displayed the reason 'Guideline-recommended post-discharge review', which was an unsourced claim of guideline authority and has been removed. Retained as an operational touchpoint because the gap between day 7 and day 42 is otherwise long for a patient at elevated risk, but presented as our judgement rather than published guidance."
+    },
+
+    "30": {
+      "day": 30,
+      "label": "One-month review",
+      "basis": "operational",
+      "reason": "Medication routine and early recovery. The cited evidence nearest this point actually specifies 4-6 weeks, which is why day 42 was added alongside it.",
+      "entries": [],
+      "evidence_note": "The guideline evidence for a review in this period points to 4-6 weeks rather than 30 days (see day 42). Day 30 is retained as an operational contact because monthly cadence is what caregivers can hold to, but it is not itself a guideline interval."
+    },
+
+    "42": {
+      "day": 42,
+      "label": "Six-week review",
+      "basis": "guideline",
+      "reason": "Two independent guideline recommendations converge on the 4-6 week window: lipid target review and mood/cognitive screening.",
+      "entries": [
+        {
+          "id": "fu_ncgs_lipid_46w",
+          "source_id": "ncgs_2023",
+          "section": "5.4 Lipid lowering therapy",
+          "heading": "Lipid-lowering treatment",
+          "excerpt": "Lipid-lowering treatment for people with ischaemic stroke or TIA and evidence of atherosclerosis should aim to reduce fasting LDL-cholesterol to below 1.8 mmol/L. If this is not achieved at first review at 4-6 weeks, the prescriber should escalate therapy.",
+          "url": "https://www.strokeguideline.org/chapter/long-term-management-and-secondary-prevention/",
+          "caveat": "Recommendation tagged [2023]. Final clause condensed from a bulleted list; consult the source for the full escalation steps."
+        },
+        {
+          "id": "fu_ncgs_mood_6w",
+          "source_id": "ncgs_2023",
+          "section": "2.13 Follow-up review and longer term support",
+          "heading": "Mood and cognitive screening",
+          "excerpt": "Services for people with stroke should provide screening for mood and cognitive disturbance within six weeks of stroke (in the acute phase of rehabilitation and at the transfer of care into post-acute services) and at six and 12 months using validated tools and observations over time.",
+          "url": "https://www.strokeguideline.org/chapter/organisation-of-stroke-services/",
+          "caveat": "Recommendation tagged [2016]."
+        }
+      ]
+    },
+
+    "90": {
+      "day": 90,
+      "label": "Three-month outcome point",
+      "basis": "trial_convention",
+      "reason": "The 90-day modified Rankin Scale is the standard primary outcome point in acute stroke trials. It measures outcome; it is not a guideline recommendation to deliver care at this point.",
+      "entries": [],
+      "evidence_note": "Deliberately carries NO citation entry. The 90-day mRS assessment is a research convention, widely used as the primary endpoint in stroke trials including IST-3, which is why this product's own 6-month and 14-day horizons were framed against trial timepoints. But no guideline in our corpus recommends a 90-day clinical review. Presenting a trial outcome timepoint as a care recommendation would be exactly the category error this file exists to prevent. Kept because it aligns the product with the outcome literature clinicians already know, and labelled honestly."
+    },
+
+    "180": {
+      "day": 180,
+      "label": "Six-month structured review",
+      "basis": "guideline",
+      "reason": "The single strongest-cited interval in the corpus, and it matches the horizon the 6-month models predict to.",
+      "entries": [
+        {
+          "id": "fu_ng236_6mo",
+          "source_id": "nice_ng236",
+          "section": "1.17.5",
+          "heading": "Long-term health and social support",
+          "excerpt": "Review the health and social care needs of people after stroke, and the needs of their carers, at 6 months and then annually. These reviews should cover participation in activities of everyday life to ensure that people's goals are met.",
+          "url": "https://www.nice.org.uk/guidance/ng236/chapter/Recommendations"
+        },
+        {
+          "id": "fu_ncgs_annual",
+          "source_id": "ncgs_2023",
+          "section": "5.2 Secondary prevention",
+          "heading": "Long-term review",
+          "excerpt": "People with stroke or TIA should have their risk factors and secondary prevention reviewed and monitored at least once a year in primary care.",
+          "url": "https://www.strokeguideline.org/chapter/long-term-management-and-secondary-prevention/",
+          "caveat": "Recommendation tagged [2016]. Establishes annual review beyond the 6-month point."
+        }
+      ]
+    }
+  }
+}

@@ -251,6 +251,42 @@ class GuidanceAnswer(BaseModel):
     disclaimer: str
 
 
+# Defined here, after RetrievedPassage, because EnrichedCheckIn embeds it.
+class CheckInCitation(GuidanceEntry):
+    """A guideline recommendation that justifies this check-in interval."""
+    source_id: str
+
+
+class EnrichedCheckIn(BaseModel):
+    """One scheduled check-in, with its evidence and both narratives.
+
+    `day` is deterministic — set by rules in Predictor._followup(), never by a
+    model. Only `clinician_note` and `caregiver_message` are generated.
+    """
+    day: int
+    label: str
+    reason: str
+    basis: Literal["guideline", "trial_convention", "operational", "unregistered"] = Field(
+        ..., description="Provenance of the INTERVAL itself. 'operational' means "
+                         "we chose this timing; no guideline recommends it.")
+    basis_explained: str
+    citations: list[CheckInCitation] = Field(
+        ..., description="Recommendations naming this interval. Empty unless "
+                         "basis is 'guideline'.")
+    passages: list[RetrievedPassage] = Field(
+        ..., description="Guidance retrieved for THIS patient's active triggers, "
+                         "used to ground the narratives below.")
+    evidence_note: str | None = None
+    clinician_note: str
+    caregiver_message: str = Field(
+        ..., description="Plain language, generated under stricter rules than the "
+                         "clinician text: no dosing, no diagnosis, no prognosis, "
+                         "and escalation advice only where a passage supports it.")
+    narrative_mode: Literal["synthesised", "static"] = Field(
+        ..., description="'static' means generation was off or unavailable and "
+                         "the fixed reason text was used instead.")
+
+
 class AssessmentResponse(BaseModel):
     assessment_id: int
     patient_id: int
@@ -266,7 +302,12 @@ class AssessmentResponse(BaseModel):
     guidance: GuidanceBundle = Field(
         ..., description="Cited guideline text for each trigger, resolved by "
                          "deterministic lookup. Nothing here is generated.")
-    followup_plan: list[CheckInPlan]
+    followup_plan: list[CheckInPlan] = Field(
+        ..., description="Raw deterministic schedule. Kept for backwards "
+                         "compatibility; prefer `timeline` below.")
+    timeline: list[EnrichedCheckIn] = Field(
+        ..., description="The same days, each with its evidence basis, citations, "
+                         "retrieved guidance and both narratives.")
     disclaimer: str
 
 

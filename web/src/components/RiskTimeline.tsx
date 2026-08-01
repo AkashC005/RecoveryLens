@@ -13,9 +13,10 @@
  * available but deliberately quiet.
  */
 
+import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import type { AssessmentResponse, RiskResult } from "../lib/api";
-import { TIER_LABEL, TIER_STYLES } from "../lib/api";
+import type { AssessmentResponse, EnrichedCheckIn, RiskResult } from "../lib/api";
+import { BASIS_META, TIER_LABEL, TIER_STYLES } from "../lib/api";
 import GuidancePanel from "./GuidancePanel";
 
 interface TimelineEvent {
@@ -24,6 +25,7 @@ interface TimelineEvent {
   title: string;
   detail?: string;
   risks?: RiskResult[];
+  checkin?: EnrichedCheckIn;
 }
 
 function buildEvents(result: AssessmentResponse): TimelineEvent[] {
@@ -31,12 +33,25 @@ function buildEvents(result: AssessmentResponse): TimelineEvent[] {
     { day: 0, kind: "discharge", title: "Discharge", detail: "Assessment recorded" },
   ];
 
-  for (const step of result.followup_plan) {
+  // Prefer the enriched timeline; fall back to the bare schedule if an older
+  // API build is serving, so the page never renders empty.
+  const checkins: EnrichedCheckIn[] =
+    result.timeline?.length
+      ? result.timeline
+      : result.followup_plan.map((s) => ({
+          day: s.day, label: s.reason, reason: s.reason,
+          basis: "operational" as const,
+          basis_explained: "", citations: [], passages: [],
+          evidence_note: null, clinician_note: s.reason,
+          caregiver_message: s.reason, narrative_mode: "static" as const,
+        }));
+
+  for (const c of checkins) {
     events.push({
-      day: step.day,
+      day: c.day,
       kind: "checkin",
-      title: `Day ${step.day} — caregiver check-in`,
-      detail: step.reason,
+      title: `Day ${c.day} — ${c.label}`,
+      checkin: c,
     });
   }
 
@@ -105,6 +120,107 @@ function RiskCard({ risk }: { risk: RiskResult }) {
   );
 }
 
+/** One scheduled check-in: its evidence basis, both narratives, and citations.
+ *
+ *  The basis chip is not decoration. A reader must be able to see instantly
+ *  whether a check-in date carries published backing or is our own scheduling
+ *  choice — the previous version of this product displayed "Guideline-recommended
+ *  post-discharge review" on a day no guideline recommends. */
+function CheckInCard({ c }: { c: EnrichedCheckIn }) {
+  const [open, setOpen] = useState(false);
+  const meta = BASIS_META[c.basis];
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded-full border px-2 py-0.5 text-[11px] ${meta.className}`}>
+          {meta.label}
+        </span>
+        {c.narrative_mode === "synthesised" && (
+          <span className="text-[11px] text-muted">generated from cited guidance</span>
+        )}
+      </div>
+
+      {/* Caregiver text leads: this is the message that actually gets sent. */}
+      <p className="mt-2 text-sm text-bone">{c.caregiver_message}</p>
+
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="mt-2 text-xs text-teal"
+      >
+        {open ? "Hide" : "Clinician view and evidence"}
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-3 border-l-2 border-raised pl-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-muted">Clinician</p>
+            <p className="mt-1 text-sm text-muted">{c.clinician_note}</p>
+          </div>
+
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-muted">
+              Why this day
+            </p>
+            <p className="mt-1 text-sm text-muted">{c.basis_explained}</p>
+            {c.evidence_note && (
+              <p className="mt-1 text-xs text-amber/90">{c.evidence_note}</p>
+            )}
+          </div>
+
+          {c.citations.length > 0 && (
+            <ul className="space-y-2">
+              {c.citations.map((e) => (
+                <li key={e.id}>
+                  <a
+                    href={e.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-xs text-teal hover:underline"
+                  >
+                    {e.source.short_title} {e.section}
+                  </a>
+                  <blockquote className="mt-1 text-sm text-bone">
+                    &ldquo;{e.excerpt}&rdquo;
+                  </blockquote>
+                  {e.caveat && (
+                    <p className="mt-1 text-xs text-amber/90">{e.caveat}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {c.passages.length > 0 && (
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-muted">
+                Retrieved for this patient
+              </p>
+              <ul className="mt-1 space-y-1">
+                {c.passages.map((p) => (
+                  <li key={p.id} className="text-xs">
+                    <a
+                      href={p.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-teal hover:underline"
+                    >
+                      {p.source.short_title} {p.section}
+                    </a>
+                    <span className="text-muted"> — {p.excerpt}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RiskTimeline({ result }: { result: AssessmentResponse }) {
   const reduce = useReducedMotion();
   const events = buildEvents(result);
@@ -162,6 +278,8 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
               {event.detail && (
                 <p className="text-sm text-muted mt-0.5">{event.detail}</p>
               )}
+
+              {event.checkin && <CheckInCard c={event.checkin} />}
 
               {event.risks && (
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">

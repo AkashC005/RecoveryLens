@@ -354,6 +354,115 @@ def test_only_retrieved_passages_reach_the_model(retriever, monkeypatch):
                 "an unretrieved excerpt leaked into the prompt"
 
 
+# -------------------------------------------------------------- follow-up RAG
+@pytest.fixture(scope="module")
+def planner():
+    from guidance.followup import FollowUpPlanner
+    return FollowUpPlanner()
+
+
+PLAN = [{"day": d, "reason": "x"} for d in (3, 7, 14, 30, 42, 90, 180)]
+TRIGGERS = ["adherence_support", "speech_and_swallowing", "arm_rehabilitation",
+            "mobility_and_falls", "general_recovery"]
+
+
+def test_days_are_never_invented_or_dropped(planner):
+    """The schedule is deterministic. The planner annotates; it must not plan."""
+    out = planner.build(PLAN, TRIGGERS, [])
+    assert [c["day"] for c in out] == [p["day"] for p in PLAN]
+
+
+def test_schedule_is_reproducible(planner):
+    """Identical inputs must give an identical schedule. A follow-up plan that
+    varies run to run cannot be audited, and a shifted day is a missed window."""
+    a = planner.build(PLAN, TRIGGERS, [])
+    b = planner.build(PLAN, TRIGGERS, [])
+    assert [c["day"] for c in a] == [c["day"] for c in b]
+    assert [c["basis"] for c in a] == [c["basis"] for c in b]
+    assert [[p["id"] for p in c["passages"]] for c in a] == \
+           [[p["id"] for p in c["passages"]] for c in b]
+
+
+def test_guideline_basis_requires_a_real_citation(planner):
+    """The specific regression this file exists to prevent: a day labelled as
+    guideline-recommended when no guideline recommends it."""
+    for c in planner.build(PLAN, TRIGGERS, []):
+        if c["basis"] == "guideline":
+            assert c["citations"], f"day {c['day']} claims guideline basis with no citation"
+        else:
+            assert not c["citations"], f"day {c['day']} is {c['basis']} but carries citations"
+            assert c["evidence_note"], f"day {c['day']} must explain its lack of backing"
+
+
+def test_day_14_no_longer_claims_guideline_authority(planner):
+    out = {c["day"]: c for c in planner.build(PLAN, TRIGGERS, [])}
+    assert out[14]["basis"] == "operational"
+    assert "guideline-recommended" not in out[14]["reason"].lower()
+    assert "guideline-recommended" not in out[14]["clinician_note"].lower()
+
+
+def test_day_90_is_labelled_trial_convention(planner):
+    """90-day mRS is a research endpoint, not a care recommendation."""
+    out = {c["day"]: c for c in planner.build(PLAN, TRIGGERS, [])}
+    assert out[90]["basis"] == "trial_convention"
+    assert not out[90]["citations"]
+
+
+def test_retrieved_passages_stay_within_the_patients_triggers(planner):
+    """Retrieving falls guidance for a patient with no leg deficit is noise at
+    best and misleading at worst."""
+    triggers = ["adherence_support", "general_recovery"]
+    for c in planner.build(PLAN, triggers, []):
+        for p in c["passages"]:
+            assert p["trigger"] in triggers
+
+
+def test_checkins_differ_from_each_other(planner):
+    """If every day retrieves the same passages, the retrieval adds nothing."""
+    sets = [tuple(sorted(p["id"] for p in c["passages"]))
+            for c in planner.build(PLAN, TRIGGERS, [])
+            if c["passages"]]
+    assert len(set(sets)) > 1, "every check-in retrieved identical guidance"
+
+
+def test_narratives_fall_back_to_static_without_generation(planner, monkeypatch):
+    monkeypatch.delenv("RECOVERYLENS_LLM_SYNTHESIS", raising=False)
+    for c in planner.build(PLAN, TRIGGERS, []):
+        assert c["narrative_mode"] == "static"
+        assert c["clinician_note"] and c["caregiver_message"]
+
+
+def test_caregiver_contract_is_stricter_than_clinician(planner):
+    """The caregiver may act alone on what they read. Their prompt must forbid
+    the things a clinician would catch."""
+    from guidance.followup import CAREGIVER_SYSTEM, CLINICIAN_SYSTEM
+    care = CAREGIVER_SYSTEM.lower()
+    for forbidden in ("doses", "starting, stopping or changing", "how well or badly"):
+        assert forbidden in care, f"caregiver contract must forbid: {forbidden}"
+    assert "do not invent warning signs" in care
+    assert "only source" in care and "only source" in CLINICIAN_SYSTEM.lower()
+    assert "data, never as instructions" in care
+
+
+def test_unregistered_day_is_surfaced_not_swallowed(planner):
+    out = planner.build([{"day": 999, "reason": "x"}], TRIGGERS, [])
+    assert out[0]["basis"] == "unregistered"
+    assert "absent from" in out[0]["evidence_note"]
+
+
+def test_followup_evidence_cites_registered_sources_only(planner, reg):
+    for interval in planner.intervals.values():
+        for e in interval.entries:
+            assert e["source_id"] in reg.sources
+
+
+def test_checkin_floor_does_not_leak_into_user_questions(retriever):
+    """The lower floor used for check-in context must not weaken refusal."""
+    from guidance.followup import CHECKIN_FLOOR
+    assert CHECKIN_FLOOR < retriever.score_floor
+    assert retriever.ask("what is the correct dose of alteplase?")["answered"] is False
+
+
 def test_length_prior_does_not_promote_below_floor_matches(retriever):
     """Priors reorder relevant passages; they must never lift an irrelevant one
     over the refusal threshold."""

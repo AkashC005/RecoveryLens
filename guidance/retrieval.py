@@ -229,7 +229,19 @@ class CorpusRetriever:
             [p.text for p in self.passages])
 
     # ---------------------------------------------------------------- retrieve
-    def search(self, question: str, top_k: int = TOP_K) -> list[dict]:
+    def search(self, question: str, top_k: int = TOP_K,
+               score_floor: float | None = None) -> list[dict]:
+        """Rank passages against a query.
+
+        `score_floor` overrides the instance default. Only one caller does this:
+        the follow-up planner, which is selecting context for a check-in whose
+        relevance is ALREADY established (the model fired that trigger), not
+        deciding whether to answer at all. Refusal semantics do not apply there,
+        and the long seeded queries it builds dilute cosine below a floor that
+        exists for a different purpose. Do NOT lower it for user questions —
+        that floor is the refusal boundary.
+        """
+        floor = self.score_floor if score_floor is None else score_floor
         q = (question or "").strip()
         if not q:
             return []
@@ -244,7 +256,7 @@ class CorpusRetriever:
 
         scored: list[tuple[float, float, Passage]] = []
         for idx, (cos, p) in enumerate(zip(cosines, self.passages)):
-            if cos < self.score_floor:
+            if cos < floor:
                 continue
             # Floor applies to the raw cosine: the priors below express preference
             # between relevant passages and must never promote an irrelevant one
