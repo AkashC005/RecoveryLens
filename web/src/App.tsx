@@ -6,10 +6,12 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import AssessmentForm from "./components/AssessmentForm";
 import RiskTimeline from "./components/RiskTimeline";
+import CaregiverCheckIn from "./components/CaregiverCheckIn";
+import ClinicianInbox from "./components/ClinicianInbox";
 import type { AssessmentResponse, PatientSummary } from "./lib/api";
 import { api, TIER_STYLES } from "./lib/api";
 
-type View = "assess" | "result" | "patients";
+type View = "assess" | "result" | "patients" | "checkin" | "inbox";
 
 function Header({ view, setView, online }: {
   view: View;
@@ -19,6 +21,8 @@ function Header({ view, setView, online }: {
   const tabs: { id: View; label: string }[] = [
     { id: "assess", label: "New assessment" },
     { id: "patients", label: "Patients" },
+    { id: "checkin", label: "Check-in" },
+    { id: "inbox", label: "Review" },
   ];
   return (
     <header className="border-b border-raised">
@@ -164,6 +168,29 @@ export default function App() {
             <motion.div key="patients" {...fade}>
               <h2 className="mb-6 text-xl font-semibold text-bone">Patients</h2>
               <PatientList />
+            </motion.div>
+          )}
+
+          {view === "checkin" && (
+            <motion.div key="checkin" {...fade}>
+              <h2 className="text-xl font-semibold text-bone">Check-in</h2>
+              <p className="mt-1 mb-6 max-w-prose text-sm text-muted">
+                For the person looking after them at home. A few short questions,
+                and space to say anything else you&rsquo;ve noticed.
+              </p>
+              <CaregiverCheckIn />
+            </motion.div>
+          )}
+
+          {view === "inbox" && (
+            <motion.div key="inbox" {...fade}>
+              <h2 className="text-xl font-semibold text-bone">Awaiting review</h2>
+              <p className="mt-1 mb-6 max-w-prose text-sm text-muted">
+                Check-ins that were escalated, most urgent first. Each shows
+                whether the flag came from the rule checks or the triage agent,
+                and what the agent looked at before deciding.
+              </p>
+              <ClinicianInbox />
             </motion.div>
           )}
         </AnimatePresence>

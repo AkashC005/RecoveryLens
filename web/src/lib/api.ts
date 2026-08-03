@@ -176,6 +176,25 @@ export interface EnrichedCheckIn {
   narrative_mode: "synthesised" | "static";
 }
 
+export interface TopicSelection {
+  topic: string;
+  /** Why THIS patient needs it, in the agent's words. */
+  rationale: string;
+  /** 'rule' = the deterministic rules chose it and the agent did not. */
+  source: "agent" | "rule";
+}
+
+export interface GuidanceSelection {
+  triggers: string[];
+  selections: TopicSelection[];
+  /** The floor. These are present whatever the agent decided. */
+  rule_topics: string[];
+  mode: "rules" | "agent" | "agent_failed";
+  agent_summary: string;
+  tool_calls: { name: string; arguments: Record<string, unknown> }[];
+  agent_error: string | null;
+}
+
 export interface AssessmentResponse {
   assessment_id: number;
   patient_id: number;
@@ -183,6 +202,7 @@ export interface AssessmentResponse {
   risks: RiskResult[];
   guidance_triggers: string[];
   guidance: GuidanceBundle;
+  guidance_selection: GuidanceSelection;
   followup_plan: CheckInPlan[];
   timeline: EnrichedCheckIn[];
   disclaimer: string;
@@ -247,6 +267,101 @@ export const api = {
 
   /** Corpus coverage + sources used and rejected. Backs the Evidence screen. */
   guidanceCoverage: () => request<Record<string, unknown>>("/api/guidance"),
+
+  // ------------------------------------------------------------ follow-up
+  /** `includeScheduled` also returns check-ins whose date has not arrived yet.
+   *  Needed to demo the carer screen at all — the first real check-in is day 3. */
+  dueCheckIns: (includeScheduled = false) =>
+    request<DueCheckIn[]>(
+      `/api/checkins/due${includeScheduled ? "?include_scheduled=true" : ""}`,
+    ),
+
+  submitCheckIn: (checkinId: number, body: CheckInSubmission) =>
+    request<CheckInResult>(`/api/checkins/${checkinId}/respond`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  escalations: () => request<Escalation[]>("/api/escalations"),
+
+  /** Whether the triage agent is actually running. A silently disabled agent
+   *  looks identical to one that found nothing — worth checking before a demo. */
+  triageStatus: () =>
+    request<{ agent_enabled: boolean; api_key_configured: boolean; note: string }>(
+      "/api/triage/status",
+    ),
+};
+
+// ------------------------------------------------------------------- triage
+export type Urgency = "routine" | "soon" | "urgent";
+
+/** How a flag was raised. `rules_only` means the agent was off or unread. */
+export type TriageMode = "rules_only" | "agent" | "agent_failed";
+
+export interface DueCheckIn {
+  id: number;
+  patient_id: number;
+  scheduled_for: string;
+  completed_at: string | null;
+  escalated: boolean;
+  responses: Record<string, unknown> | null;
+}
+
+export interface CheckInSubmission {
+  taking_medication: boolean;
+  new_symptoms: boolean;
+  worse_than_last_week: boolean;
+  /** Free text. Until the triage agent existed, this was stored and never read. */
+  free_text?: string | null;
+}
+
+export interface CheckInResult {
+  check_in_id: number;
+  escalated: boolean;
+  escalation_reason: string | null;
+  urgency: Urgency;
+  triage_mode: TriageMode;
+  rule_reasons: string[];
+  agent_reasons: string[];
+  message: string;
+}
+
+export interface TriageToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  error: string | null;
+}
+
+export interface TriageRecord {
+  escalated: boolean;
+  escalation_reason: string | null;
+  /** Raised by the deterministic boolean checks. Never removable by the agent. */
+  rule_reasons: string[];
+  /** Added by the agent. Additive only. */
+  agent_reasons: string[];
+  urgency: Urgency;
+  agent_summary: string;
+  tool_calls: TriageToolCall[];
+  mode: TriageMode;
+  agent_error: string | null;
+}
+
+export interface Escalation {
+  check_in_id: number;
+  patient_id: number;
+  patient_ref: string | null;
+  completed_at: string;
+  reason: string | null;
+  urgency: Urgency;
+  responses: Record<string, unknown> | null;
+  triage: TriageRecord | null;
+}
+
+export const URGENCY_STYLES: Record<Urgency, { label: string; className: string }> = {
+  urgent:  { label: "Urgent",  className: "border-signal/50 text-signal" },
+  soon:    { label: "Soon",    className: "border-amber/40 text-amber" },
+  routine: { label: "Routine", className: "border-raised text-muted" },
 };
 
 // -------------------------------------------------------------------- tokens

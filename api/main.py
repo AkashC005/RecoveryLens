@@ -20,6 +20,11 @@ from sqlalchemy.orm import Session
 
 from guidance import UnknownTrigger, get_retriever, guidance_registry
 from guidance.followup import planner as followup_planner
+from guidance.selector import selector as guidance_selector, selector_enabled
+from guidance.retrieval import _synthesis_enabled as _synthesis_on
+from triage import TriageAgent, agent_enabled
+
+from .triage_tools import DatabaseToolBox
 
 from .database import Assessment, CheckIn, Patient, get_db, init_db, utcnow
 from .predictor import predictor
@@ -160,6 +165,23 @@ def _run_assessment(req: AssessmentRequest, db: Session,
     except Exception as exc:
         raise HTTPException(500, f"Prediction failed: {exc}") from exc
 
+    # Guidance selection. The deterministic rules in Predictor._guidance() have
+    # already run and their output is in result["guidance_triggers"]; that list
+    # is passed in as a floor the agent cannot drop below. The agent reads the
+    # full picture — including the four deficits the rules never inspect — and
+    # decides what matters for this patient, with a rationale per topic.
+    #
+    # If the agent is off or fails, `select()` returns the rule topics unchanged,
+    # so this call is safe to make unconditionally.
+    deficits = {k: str(v).split(".")[-1]
+                for k, v in req.model_dump().items() if k.startswith("deficit_")}
+    selection = guidance_selector.select(
+        risks=result["risks"],
+        deficits=deficits,
+        rule_topics=result["guidance_triggers"],
+    )
+    result["guidance_triggers"] = selection["triggers"]
+
     created = patient is None
     if created:
         patient = Patient(
@@ -210,6 +232,7 @@ def _run_assessment(req: AssessmentRequest, db: Session,
         # git; freezing a copy into every assessment row would mean a guideline
         # correction never reaches records already written.
         guidance=guidance_registry.for_assessment(result["guidance_triggers"]),
+        guidance_selection=selection,
         # Days come from result["followup_plan"] unchanged. The planner only
         # annotates them with evidence and narratives — it never adds, removes
         # or moves a check-in.
@@ -303,12 +326,19 @@ def delete_patient(patient_id: int, db: Session = Depends(get_db)):
 
 # --------------------------------------------------------------------------- check-ins
 @app.get("/api/checkins/due", response_model=list[CheckInResponse], tags=["follow-up"])
-def due_checkins(db: Session = Depends(get_db)):
-    """Check-ins ready to send. The scheduler (Sprint 5) polls this."""
-    rows = (db.query(CheckIn)
-              .filter(CheckIn.completed_at.is_(None),
-                      CheckIn.scheduled_for <= utcnow())
-              .order_by(CheckIn.scheduled_for).all())
+def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db)):
+    """Check-ins ready to send. The scheduler (Sprint 5) polls this.
+
+    `include_scheduled=true` also returns check-ins whose date has not arrived
+    yet. Strictly a demo and testing affordance: a fresh assessment schedules its
+    first contact for day 3, so without this the carer screen is correctly but
+    unhelpfully empty for three days. The scheduler must never pass it — sending
+    a day-90 check-in on day 1 would be worse than sending none.
+    """
+    query = db.query(CheckIn).filter(CheckIn.completed_at.is_(None))
+    if not include_scheduled:
+        query = query.filter(CheckIn.scheduled_for <= utcnow())
+    rows = query.order_by(CheckIn.scheduled_for).all()
     return [CheckInResponse(
         id=c.id, patient_id=c.patient_id, scheduled_for=c.scheduled_for,
         completed_at=c.completed_at, escalated=c.escalated, responses=c.responses,
@@ -324,6 +354,8 @@ def submit_checkin(checkin_id: int, sub: CheckInSubmission,
     if not c:
         raise HTTPException(404, "Check-in not found")
 
+    # STEP 1 — the boolean rules. These run first, always, and their output is
+    # never revisited. Everything below can only add to this list.
     reasons = []
     if not sub.taking_medication:
         reasons.append("Medication not being taken")
@@ -332,16 +364,32 @@ def submit_checkin(checkin_id: int, sub: CheckInSubmission,
     if sub.worse_than_last_week:
         reasons.append("Condition reported as worsening")
 
+    # STEP 2 — the agent reads the free text, which until now was stored and
+    # never looked at. It may add reasons; it has no capability to remove any.
+    # If it is disabled, unconfigured, or fails outright, `finalise()` returns
+    # the rule result unchanged.
+    result = TriageAgent(DatabaseToolBox(db)).run(
+        free_text=sub.free_text or "",
+        rule_escalations=reasons,
+        patient_id=c.patient_id,
+    ).finalise()
+
     c.responses = sub.model_dump()
     c.completed_at = utcnow()
-    c.escalated = bool(reasons)
-    c.escalation_reason = "; ".join(reasons) if reasons else None
+    c.escalated = result["escalated"]
+    c.escalation_reason = result["escalation_reason"]
+    c.urgency = result["urgency"]
+    c.triage = result
     db.commit()
 
     return {
         "check_in_id": c.id,
         "escalated": c.escalated,
         "escalation_reason": c.escalation_reason,
+        "urgency": c.urgency,
+        "triage_mode": result["mode"],
+        "rule_reasons": result["rule_reasons"],
+        "agent_reasons": result["agent_reasons"],
         "message": ("A clinician will review this response."
                     if c.escalated else "Thank you — recorded."),
     }
@@ -349,7 +397,13 @@ def submit_checkin(checkin_id: int, sub: CheckInSubmission,
 
 @app.get("/api/escalations", tags=["follow-up"])
 def escalations(db: Session = Depends(get_db)):
-    """Clinician inbox: responses that tripped an escalation rule."""
+    """Clinician inbox.
+
+    Returns the triage record alongside the flag so a clinician can see WHY it
+    was raised and by what — the boolean rules or the agent — plus which tools
+    the agent consulted. An escalation a clinician cannot audit is one they will
+    learn to ignore.
+    """
     rows = (db.query(CheckIn)
               .filter(CheckIn.escalated.is_(True))
               .order_by(CheckIn.completed_at.desc()).all())
@@ -359,5 +413,52 @@ def escalations(db: Session = Depends(get_db)):
         "patient_ref": c.patient.patient_ref if c.patient else None,
         "completed_at": c.completed_at,
         "reason": c.escalation_reason,
+        "urgency": c.urgency or "routine",
         "responses": c.responses,
+        "triage": c.triage,
     } for c in rows]
+
+
+@app.get("/api/triage/status", tags=["meta"])
+def ai_status():
+    """Which model-driven features are actually live.
+
+    Every one is off by default and degrades silently to deterministic
+    behaviour, which is correct engineering and terrible for debugging: a
+    disabled feature looks exactly like one that ran and found nothing. This
+    endpoint is the single place to see what is really switched on.
+    """
+    key = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    features = {
+        "guidance_selection": {
+            "enabled": selector_enabled(),
+            "env": "RECOVERYLENS_GUIDANCE_AGENT",
+            "what": "Agent chooses which guidance topics apply, and why.",
+            "fallback": "Deterministic if/else on risk tiers and 4 of 8 deficits.",
+        },
+        "checkin_narratives": {
+            "enabled": _synthesis_on(),
+            "env": "RECOVERYLENS_LLM_SYNTHESIS",
+            "what": "Generates clinician and caregiver text for each check-in, "
+                    "and prose answers in the Ask box.",
+            "fallback": "Retrieved passages returned verbatim.",
+        },
+        "triage_agent": {
+            "enabled": agent_enabled(),
+            "env": "RECOVERYLENS_TRIAGE_AGENT",
+            "what": "Reads caregiver free text and decides whether a clinician "
+                    "should see it.",
+            "fallback": "Three boolean checks only; free text is not read.",
+        },
+    }
+    live = [k for k, v in features.items() if v["enabled"] and key]
+
+    return {
+        "api_key_configured": key,
+        "features": features,
+        "live": live,
+        "all_live": len(live) == len(features),
+        "note": ("Predictions are always the trained models — never an LLM. "
+                 "Guidance excerpts are always verbatim and cited. Agents choose "
+                 "and explain; they do not write clinical text."),
+    }

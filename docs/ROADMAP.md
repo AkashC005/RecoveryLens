@@ -79,9 +79,15 @@ question can knock over.
   already exists
 - One predictor per outcome. `mapie`, or ~80 lines by hand
 - Surface as `probability_lower` / `probability_upper` in the API
-- Target 90% coverage, verified empirically on the test set
-- Payoff: `recurrence_14d` (AUC 0.59) stops being an apology and becomes an
-  honest wide interval
+- **Correction to an earlier claim in this file.** It previously said this would
+  make `recurrence_14d` (AUC 0.59) "an honest wide interval". A synthetic test
+  disproved that: weak signal produces *narrower* Venn-Abers intervals
+  (0.0069) than strong signal (0.0222), because a flat isotonic fit barely moves
+  when one point is added. Width tracks calibration-set density, not model
+  quality. See the header of `ml/07_conformal.py`.
+- The real payoff is recalibration: IST-3 measured CITL at −0.75 and −0.58,
+  meaning raw probabilities are systematically too high. Venn-Abers is isotonic
+  recalibration with a validity guarantee, plus honest error bars on it
 
 ## 3. Escalation triage agent — 10–14h
 

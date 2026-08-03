@@ -32,6 +32,7 @@ import type {
   GuidanceBlock,
   GuidanceBundle,
   GuidanceEntry,
+  GuidanceSelection,
 } from "../lib/api";
 
 /** Verbatim guideline text. Never restyle this to match our own prose. */
@@ -247,7 +248,78 @@ function AskBox() {
   );
 }
 
-export default function GuidancePanel({ bundle }: { bundle: GuidanceBundle }) {
+/** How the topics were chosen. Shown because the selection is now a model's
+ *  judgement rather than an if/else, and a clinician should be able to see the
+ *  reasoning and disagree with it. */
+function SelectionTrace({ sel }: { sel: GuidanceSelection }) {
+  const [open, setOpen] = useState(false);
+  if (!sel) return null;
+
+  const agentPicked = sel.selections.filter((s) => s.source === "agent");
+  const label =
+    sel.mode === "agent" ? `Selected by agent · ${agentPicked.length} topics`
+    : sel.mode === "agent_failed" ? "Agent unavailable — rules applied"
+    : "Selected by rules";
+
+  return (
+    <div className="card p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 text-left"
+      >
+        <span className="text-sm text-bone">{label}</span>
+        <span aria-hidden className={`text-muted transition-transform ${open ? "rotate-90" : ""}`}>›</span>
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3 border-t border-raised pt-3">
+          {sel.agent_summary && (
+            <p className="whitespace-pre-line text-sm text-muted">{sel.agent_summary}</p>
+          )}
+
+          <ul className="space-y-2">
+            {sel.selections.map((s) => (
+              <li key={s.topic} className="text-sm">
+                <span className="text-bone">{s.topic.replace(/_/g, " ")}</span>
+                {s.source === "rule" && (
+                  <span className="ml-2 rounded-sm bg-raised px-1.5 py-0.5 text-[11px] text-muted">
+                    rule
+                  </span>
+                )}
+                <span className="block text-muted">{s.rationale}</span>
+              </li>
+            ))}
+          </ul>
+
+          {sel.tool_calls.length > 0 && (
+            <div>
+              <p className="text-[11px] uppercase tracking-wide text-muted">What it checked</p>
+              <ul className="mt-1">
+                {sel.tool_calls.map((c, i) => (
+                  <li key={i} className="font-mono text-xs text-muted">· {c.name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {sel.mode === "agent_failed" && (
+            <p className="text-xs text-amber/90">
+              {sel.agent_error} — the deterministic rules still selected guidance,
+              so nothing was missed.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function GuidancePanel({ bundle, selection }: {
+  bundle: GuidanceBundle;
+  selection?: GuidanceSelection;
+}) {
   if (!bundle?.guidance?.length) return null;
 
   return (
@@ -255,11 +327,13 @@ export default function GuidancePanel({ bundle }: { bundle: GuidanceBundle }) {
       <header>
         <h2 className="text-lg font-semibold text-bone">Guidance</h2>
         <p className="mt-1 max-w-prose text-sm text-muted">
-          Retrieved verbatim from published guidelines for this patient&rsquo;s risk
-          profile and recorded deficits. Nothing here is generated — follow any
-          citation to read the recommendation in full.
+          Topics chosen for this patient&rsquo;s risk profile and recorded deficits.
+          The recommendations themselves are quoted verbatim from published
+          guidelines — only the choice of which apply is made per patient.
         </p>
       </header>
+
+      {selection && <SelectionTrace sel={selection} />}
 
       {/* Drift alarm. Should always be empty; if it is not, the model is emitting
           a trigger the corpus cannot resolve and someone must fix it. */}

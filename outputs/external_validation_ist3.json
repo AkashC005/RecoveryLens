@@ -1,0 +1,130 @@
+{
+  "provisional": true,
+  "unverified_assumptions": {
+    "gender": {
+      "verified": false,
+      "claim": "IST-3 gender 1=female, 2=male",
+      "basis": "Mean age 80.0 (gender=1) vs 74.4 (gender=2). IST-1 women are older (74.2 vs 69.6). Same direction implies 1=female.",
+      "risk": "If inverted, the SEX feature is wrong for all 3,035 rows and every metric shifts without looking broken."
+    },
+    "deficits": {
+      "verified": false,
+      "claim": "Deficit variables 1=present, 2=absent, 4=cannot assess",
+      "basis": "weakarm_rand is 1 for 2,622 of 3,035 \u2014 arm weakness is the commonest deficit, so 1 must be 'present'. IST-1 RDEF2 is likewise Y for 16,645 of 19,435. Value 4 is rare (10 rows), consistent with IST-1's 'C' (cannot assess, 123 rows).",
+      "risk": "Inversion would flip all eight deficit features and both derived counts."
+    },
+    "stroketype": {
+      "verified": false,
+      "claim": "stroketype 1=PACS, 2=TACS, 3=LACS, 4=POCS, 5=OTH",
+      "basis": "WEAKEST ASSUMPTION IN THIS FILE. Frequency-ordered only, and the IST-1 frequency order (PACS>LACS>TACS>POCS) does NOT match IST-3's (1>2>3>4). IST-3 enrolled more severe strokes, so the true order is likely different. Do not accept without the dictionary.",
+      "risk": "Mis-ordering scrambles a categorical feature that one-hot encodes into four columns."
+    },
+    "atrialfib": {
+      "verified": false,
+      "claim": "atrialfib_rand 1=yes, 2=no",
+      "basis": "914 of 3,035 (30%) coded 1. AF prevalence in an elderly thrombolysis cohort is plausibly ~30%; 70% would not be.",
+      "risk": "Inversion flips a categorical feature."
+    },
+    "infarct": {
+      "verified": false,
+      "claim": "infarct 0=not visible, 1 or 2=visible",
+      "basis": "Three levels (0:1792, 1:701, 2:542) against IST-1's binary RVISINF. Collapsing 1 and 2 to 'visible' is a guess; 2 may mean 'cannot assess'.",
+      "risk": "Would mislabel 542 patients on RVISINF."
+    },
+    "aspirin_pre": {
+      "verified": false,
+      "claim": "aspirin_pre 1=yes, 2=no; 20 and 40 are missing codes",
+      "basis": "Values 20 and 40 appear across many IST-3 columns in patterns consistent with missing-data sentinels, not real values.",
+      "risk": "Treating 40 as a real value would corrupt RASP3."
+    },
+    "meds_6m": {
+      "verified": false,
+      "claim": "aspirin6 / bloodthin6: 1=yes, 2=no, 3=unknown; 10/20/30/40 missing",
+      "basis": "Same sentinel pattern. 1,026 patients coded 3 and 815 coded 10 - too many for either to be a real treatment state.",
+      "risk": "Directly determines the nonadherence_6m denominator."
+    },
+    "censor6": {
+      "verified": false,
+      "claim": "censor6 1=censored (alive), 0=event (died)",
+      "basis": "surv6<=14 AND censor6==1 yields 8 patients, but dead7 is 270. The indicator must therefore run the other way.",
+      "risk": "Inversion makes death_14d meaningless."
+    }
+  },
+  "n_patients": 3035,
+  "absent_features": {
+    "RXASP": 0,
+    "RXHEP": "N",
+    "RCT": 1,
+    "RSLEEP": 0
+  },
+  "unvalidatable_outcomes": {
+    "pe_14d": "IST-3 records no pulmonary embolism variable. Nothing to score against.",
+    "recurrence_14d": "`rec7` is a form-received flag (3,034 of 3,035 patients), not a recurrence event. No usable equivalent exists."
+  },
+  "results": [
+    {
+      "outcome": "death_14d",
+      "n": 3035,
+      "events": 372,
+      "prevalence": 0.1226,
+      "auc": 0.7363,
+      "ci": [
+        0.7109,
+        0.7603
+      ],
+      "brier": 0.1067,
+      "cal_slope": 0.8087,
+      "citl": -0.5833,
+      "ist1_auc": 0.7932442536514935,
+      "note": "Derived from surv6 <= 14 with censor6 as the event indicator. Depends on the censor6 assumption."
+    },
+    {
+      "outcome": "haemorrhage_14d",
+      "n": 3035,
+      "events": 120,
+      "prevalence": 0.0395,
+      "auc": 0.6009,
+      "ci": [
+        0.5512,
+        0.6533
+      ],
+      "brier": 0.039,
+      "cal_slope": 0.5627,
+      "citl": 1.8179,
+      "ist1_auc": 0.7321892875715029,
+      "note": "sich7 = SYMPTOMATIC intracranial haemorrhage at 7 DAYS. Two departures from IST-1's H14: a 7-day rather than 14-day horizon, and a stricter symptomatic-only definition. In a thrombolysis trial these events are largely treatment-induced, which IST-1 could not observe. Poor transport here is expected and is not evidence the model is broken."
+    },
+    {
+      "outcome": "poor_outcome_6m",
+      "n": 3035,
+      "events": 1947,
+      "prevalence": 0.6415,
+      "auc": 0.7902,
+      "ci": [
+        0.775,
+        0.8071
+      ],
+      "brier": 0.1888,
+      "cal_slope": 0.8439,
+      "citl": -0.7531,
+      "ist1_auc": 0.8015800428276892,
+      "note": "deadordep6 maps directly onto IST-1's OCCODE dead-or-dependent definition. Cleanest of the five."
+    },
+    {
+      "outcome": "nonadherence_6m",
+      "n": 468,
+      "events": 197,
+      "prevalence": 0.4209,
+      "auc": 0.5074,
+      "ci": [
+        0.4572,
+        0.5614
+      ],
+      "brier": 0.3095,
+      "cal_slope": 0.0634,
+      "citl": 1.3055,
+      "ist1_auc": 0.6261655124712153,
+      "note": "Alive at 6 months, both medication fields known, on neither antiplatelet nor anticoagulant - mirrors the IST-1 FAP/FOAC definition."
+    }
+  ]
+}

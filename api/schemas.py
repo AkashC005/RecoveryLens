@@ -287,6 +287,31 @@ class EnrichedCheckIn(BaseModel):
                          "the fixed reason text was used instead.")
 
 
+class TopicSelection(BaseModel):
+    topic: str
+    rationale: str = Field(
+        ..., description="Why THIS patient needs this topic, in the agent's words.")
+    source: Literal["agent", "rule"] = Field(
+        ..., description="'rule' means the deterministic rules chose it and the "
+                         "agent did not — it is included regardless.")
+
+
+class GuidanceSelection(BaseModel):
+    """How the guidance topics for this patient were chosen.
+
+    The deterministic rules always run first; `rule_topics` is the floor the
+    agent cannot drop below. The agent may add topics the rules miss — notably
+    from the four deficits the rules never inspect — and orders by priority.
+    """
+    triggers: list[str]
+    selections: list[TopicSelection]
+    rule_topics: list[str]
+    mode: Literal["rules", "agent", "agent_failed"]
+    agent_summary: str = ""
+    tool_calls: list[dict] = []
+    agent_error: str | None = None
+
+
 class AssessmentResponse(BaseModel):
     assessment_id: int
     patient_id: int
@@ -300,8 +325,11 @@ class AssessmentResponse(BaseModel):
     guidance_triggers: list[str] = Field(
         ..., description="Content categories for the guidance layer to retrieve.")
     guidance: GuidanceBundle = Field(
-        ..., description="Cited guideline text for each trigger, resolved by "
-                         "deterministic lookup. Nothing here is generated.")
+        ..., description="Cited guideline text for each trigger. The excerpts are "
+                         "always verbatim; only the SELECTION of topics may be "
+                         "agent-driven — see `guidance_selection`.")
+    guidance_selection: GuidanceSelection = Field(
+        ..., description="How those topics were chosen, and why.")
     followup_plan: list[CheckInPlan] = Field(
         ..., description="Raw deterministic schedule. Kept for backwards "
                          "compatibility; prefer `timeline` below.")

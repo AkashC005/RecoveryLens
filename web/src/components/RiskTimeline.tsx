@@ -298,7 +298,12 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
           text itself, so the chips are replaced by the real content. Falls back
           to nothing rather than to chips: a label with no content is a promise
           the product cannot keep. */}
-      {result.guidance && <GuidancePanel bundle={result.guidance} />}
+      {result.guidance && (
+        <GuidancePanel
+          bundle={result.guidance}
+          selection={result.guidance_selection}
+        />
+      )}
 
       <p className="mt-6 text-xs text-muted/80 max-w-prose">{result.disclaimer}</p>
     </section>

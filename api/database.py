@@ -74,6 +74,14 @@ class CheckIn(Base):
     escalated = Column(Boolean, default=False, index=True)
     escalation_reason = Column(String, nullable=True)
 
+    # Triage output. `triage` holds the full record: which reasons came from the
+    # boolean rules and which from the agent, the urgency, the agent's summary,
+    # and the tool trace. Kept separate from `escalation_reason` so a clinician
+    # can always see the provenance of a flag — rule or agent — rather than a
+    # merged string that hides which is which.
+    urgency = Column(String, default="routine", index=True)
+    triage = Column(JSON, nullable=True)
+
     patient = relationship("Patient", back_populates="check_ins")
 
 
