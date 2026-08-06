@@ -219,4 +219,15 @@ def test_tool_trace_is_recorded(monkeypatch):
 def test_search_tool_returns_real_corpus_excerpts():
     hits = GuidanceSelector()._search("wrist splints upper limb")
     assert hits and "excerpt" in hits[0]
-    assert hits[0]["topic"] in CANONICAL_TRIGGERS
+
+
+def test_search_marks_ingested_chunks_as_not_selectable():
+    """Search may surface auto-ingested chunks, which belong to no trigger. The
+    agent must not be able to mistake one for a topic it can choose."""
+    hits = GuidanceSelector()._search("spasticity contractures splinting")
+    for h in hits:
+        if h.get("topic") is None:
+            assert h["selectable"] is False
+        else:
+            assert h["selectable"] is True
+            assert h["topic"] in CANONICAL_TRIGGERS

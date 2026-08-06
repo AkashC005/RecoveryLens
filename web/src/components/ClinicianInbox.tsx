@@ -20,7 +20,7 @@
 
 import { useEffect, useState } from "react";
 import { api, URGENCY_STYLES } from "../lib/api";
-import type { Escalation } from "../lib/api";
+import type { AiStatus, Escalation } from "../lib/api";
 
 const URGENCY_ORDER = { urgent: 0, soon: 1, routine: 2 } as const;
 
@@ -114,7 +114,7 @@ function AgentTrace({ e }: { e: Escalation }) {
 
 export default function ClinicianInbox() {
   const [rows, setRows] = useState<Escalation[] | null>(null);
-  const [status, setStatus] = useState<{ agent_enabled: boolean } | null>(null);
+  const [status, setStatus] = useState<AiStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -131,11 +131,20 @@ export default function ClinicianInbox() {
 
   return (
     <div className="space-y-4">
-      {status && !status.agent_enabled && (
+      {status && !status.features.triage_agent.enabled && (
         <div className="card p-3">
           <p className="text-xs text-muted">
-            Triage agent is off. Check-ins still escalate on the rule checks, but
-            free-text notes from carers are not being read.
+            Triage agent is off ({status.features.triage_agent.env}). Check-ins
+            still escalate on the rule checks, but free-text notes from carers are
+            not being read.
+          </p>
+        </div>
+      )}
+      {status && status.features.triage_agent.enabled && !status.api_key_configured && (
+        <div className="card p-3">
+          <p className="text-xs text-amber/90">
+            Triage agent is enabled but no API key is configured, so it cannot
+            run. Rule checks still apply.
           </p>
         </div>
       )}

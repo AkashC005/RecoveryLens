@@ -38,8 +38,14 @@ Answer modes
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import json
 import os
 import re
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -126,12 +132,57 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
 # against words we invented. Expanding the query reaches the same real terms
 # without manufacturing any.
 
-# A match resting on one generic word is not a match. "How do I manage a
-# myocardial infarction?" overlapped the corpus on the single token "manage" and
-# scored 0.19 — above the floor, and completely wrong. Requiring two distinct
-# shared terms costs nothing on real questions and removes this whole class of
-# spurious hit.
-MIN_TERM_OVERLAP = 2
+# A match resting on one generic word is not a match: "how do I manage a
+# myocardial infarction?" overlaps the corpus on "manage" alone and scores 0.15.
+#
+# Requiring two shared terms removed that, but it also silently killed every
+# single-keyword question. "What about spasticity?" has exactly ONE content word
+# after stopwords, so it could never clear the bar — and was refused despite
+# NG236 having a whole section on spasticity, at cosine 0.426.
+#
+# IDF cannot separate them either: "manage" scores 4.48 against "spasticity" at
+# 4.11, because the guidelines say "offer" and "consider" rather than "manage".
+#
+# What DOES separate them is cosine at a given overlap. Measured over 291 chunks:
+#
+#   one shared term, genuine   spasticity 0.426, incontinence 0.441, statins 0.326
+#   one shared term, spurious  glioma 0.165, myocardial infarction 0.152
+#
+# So the bar scales with how much the query and passage actually share. A single
+# term has to earn its place; two or more are held to the ordinary floor.
+MIN_TERM_OVERLAP = 1
+SINGLE_TERM_FLOOR = 0.30
+
+# Refusal threshold when embeddings are blended in. MEASURED via
+# `python -m guidance.tune_floor` over 291 chunks; re-run it if the corpus changes.
+#
+# The measurement showed no clean threshold, and the reason matters:
+#
+#   in scope, lowest      0.285  "what about sexual function?"
+#   out of scope, highest 0.379  "what is the correct dose of alteplase?"
+#                         0.331  "how do I manage a myocardial infarction?"
+#                         0.280  "what are the surgical options for glioma?"
+#   plainly unrelated     0.171  meningitis · 0.156 hernia · 0.072 France
+#
+# The three high out-of-scope scores are not retrieval errors. Alteplase is a
+# stroke drug and NG128 covers thrombolysis, so the embedding is right that the
+# question is stroke-related — the corpus simply holds no DOSING information.
+# That is a category error, not an irrelevance.
+#
+# A floor above them (0.389) would discard 7 legitimate questions to block 3 that
+# are genuinely on topic. So the floor sits below the plainly-unrelated cluster
+# instead, and questions landing in the band above it are marked `marginal`:
+# passages are returned, and the answer says plainly that they may not address
+# what was asked. The grounding contract already requires exactly that.
+#
+# Refusal at retrieval time was a patch for a corpus too thin to retrieve
+# anything useful. At 291 chunks the honest division of labour is: retrieval
+# finds what is topically close, and the answer is honest about sufficiency.
+EMBED_FLOOR = 0.28
+
+# Above this, retrieval is confident the passages address the question. Between
+# EMBED_FLOOR and here, they are topically close but may not answer it.
+EMBED_CONFIDENT = 0.42
 
 # Cosine similarity over TF-IDF systematically favours short documents: with
 # fewer terms in the vector, each match carries more weight. Left uncorrected,
@@ -157,12 +208,25 @@ def _expand(text: str) -> str:
     return text + " " + " ".join(extra)
 
 
+def _source_ref(src) -> dict:
+    return {
+        "id": src.id, "tier": src.tier, "short_title": src.short_title,
+        "title": src.title, "publisher": src.publisher,
+        "published": src.published, "jurisdiction": src.jurisdiction,
+        "retrieved": src.retrieved, "scope_caveat": src.scope_caveat,
+    }
+
+
 @dataclass
 class Passage:
     """One indexed unit. Deliberately mirrors a corpus entry 1:1 — we never
-    re-chunk, so every retrieved passage carries its original citation."""
+    re-chunk, so every retrieved passage carries its original citation.
+
+    `trigger` is None for auto-ingested chunks. That is what keeps them out of
+    the deterministic patient-facing path, which filters on trigger membership.
+    """
     entry_id: str
-    trigger: str
+    trigger: str | None
     text: str
     payload: dict
 
@@ -177,6 +241,48 @@ class CorpusRetriever:
         self._build()
 
     # ------------------------------------------------------------------- index
+    def _load_ingested(self) -> list[Passage]:
+        """Auto-extracted chunks from guidance/corpus_full.json, if present.
+
+        These exist because the hand-curated corpus was measurably too small:
+        across 25 realistic clinician questions the retriever refused 16 (64%),
+        including spasticity, fatigue and cognition — all of which NICE NG236
+        covers. Hand-curation gave precise citations and poor coverage.
+
+        They are indexed for Q&A ONLY. `trigger` is set to None so the
+        deterministic trigger lookup and the follow-up planner cannot reach them:
+        patient-facing guidance stays on hand-verified text. Each carries
+        `extraction: "automatic"` so the UI can say which it is showing.
+        """
+        path = HERE / "corpus_full.json"
+        if not path.exists():
+            return []
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[guidance] could not read corpus_full.json ({type(exc).__name__}); "
+                  f"Q&A will use the curated corpus only.")
+            return []
+
+        out: list[Passage] = []
+        for c in data.get("chunks", []):
+            src = self.registry.sources.get(c.get("source_id", ""))
+            if not src:
+                continue        # never index a chunk we cannot attribute
+            payload = {
+                "id": c["id"], "section": c["section"], "heading": c.get("heading", ""),
+                "excerpt": c["excerpt"], "caveat": None, "retrieval_weight": 1.0,
+                "url": src.url, "extraction": "automatic",
+                "year_tag": c.get("year_tag", ""),
+                "source": _source_ref(src),
+            }
+            out.append(Passage(
+                entry_id=c["id"], trigger=None,
+                text=" ".join([c.get("heading", ""), c["excerpt"]]),
+                payload=payload))
+        return out
+
     def _build(self) -> None:
         for trigger in sorted(self.registry.triggers):
             block = self.registry.get(trigger)
@@ -195,8 +301,12 @@ class CorpusRetriever:
                     entry_id=entry["id"],
                     trigger=trigger,
                     text=indexable,
-                    payload=entry,
+                    payload={**entry, "extraction": "curated"},
                 ))
+
+        self.curated_count = len(self.passages)
+        self.passages.extend(self._load_ingested())
+        self.ingested_count = len(self.passages) - self.curated_count
 
         if not self.passages:
             raise RuntimeError("Corpus produced no indexable passages.")
@@ -228,6 +338,39 @@ class CorpusRetriever:
         self._word_matrix = self._word_vectorizer.fit_transform(
             [p.text for p in self.passages])
 
+        self._load_embeddings()
+
+    def _load_embeddings(self) -> None:
+        """Attach cached corpus embeddings, if they exist and cover everything.
+
+        Optional throughout. No key, no cache, or partial coverage leaves the
+        retriever on TF-IDF alone — which still works, just less well on
+        paraphrase.
+        """
+        self._embed_matrix = None
+        self._embed_index = None
+
+        from .embeddings import EmbeddingIndex, embeddings_enabled
+        if not embeddings_enabled():
+            return
+
+        index = EmbeddingIndex.load()
+        if index is None:
+            print("[guidance] embeddings enabled but no cache found. "
+                  "Run: python -m guidance.embeddings")
+            return
+
+        matrix = index.matrix_for([p.text for p in self.passages])
+        if matrix is None:
+            # Partial coverage would score some passages semantically and others
+            # at zero, ranking the embedded ones higher for no good reason.
+            print("[guidance] embedding cache is stale (corpus changed). "
+                  "Re-run: python -m guidance.embeddings")
+            return
+
+        self._embed_index = index
+        self._embed_matrix = matrix
+
     # ---------------------------------------------------------------- retrieve
     def search(self, question: str, top_k: int = TOP_K,
                score_floor: float | None = None) -> list[dict]:
@@ -241,14 +384,45 @@ class CorpusRetriever:
         exists for a different purpose. Do NOT lower it for user questions —
         that floor is the refusal boundary.
         """
-        floor = self.score_floor if score_floor is None else score_floor
         q = (question or "").strip()
         if not q:
             return []
 
+        # NOTE: the floor is chosen AFTER scoring, further down, because it
+        # depends on whether the semantic blend actually ran — not merely on
+        # whether a cache is loaded. An earlier version decided here, and when
+        # the cache existed but a query embedding failed it compared EMBED_FLOOR
+        # (0.28) against raw TF-IDF scores. Different scales, so nothing cleared
+        # the bar and the retriever silently returned nothing.
+        pass
+
         expanded = _expand(q)
         vec = self._vectorizer.transform([expanded])
         cosines = cosine_similarity(vec, self._matrix).ravel()
+
+        # Blend in semantic similarity where available. TF-IDF stays in the mix
+        # rather than being replaced: it is better on exact clinical terms
+        # ("hemianopia", a section number) where an embedding can blur
+        # distinctions that matter. Embeddings carry the paraphrase cases TF-IDF
+        # structurally cannot reach.
+        semantic = None
+        if self._embed_matrix is not None and self._embed_index is not None:
+            qvec = self._embed_index.embed_query(q)
+            if qvec is not None:
+                from .embeddings import BLEND_WEIGHT
+                semantic = self._embed_matrix @ qvec        # both normalised
+                cosines = ((1 - BLEND_WEIGHT) * cosines
+                           + BLEND_WEIGHT * np.clip(semantic, 0.0, 1.0))
+
+        # Now that we know which scoring actually ran, pick the matching floor.
+        # `semantic is not None` means the blend happened; a loaded cache alone
+        # does not, because the query embedding can still fail.
+        if score_floor is not None:
+            floor = score_floor
+        elif semantic is not None:
+            floor = EMBED_FLOOR
+        else:
+            floor = self.score_floor
 
         # Whole words the query and each passage genuinely share — see the note
         # on _word_vectorizer for why this is not taken from the main matrix.
@@ -261,9 +435,22 @@ class CorpusRetriever:
             # Floor applies to the raw cosine: the priors below express preference
             # between relevant passages and must never promote an irrelevant one
             # over the refusal threshold.
-            overlap = len(query_terms & set(self._word_matrix[idx].nonzero()[1]))
-            if overlap < MIN_TERM_OVERLAP:
-                continue
+            # Word-overlap gates are a TF-IDF patch and are SKIPPED when
+            # semantic scores are in play. They would block exactly the cases
+            # embeddings exist to fix: "can they drive after a stroke?" shares
+            # no whole word with "when advising people about driving", so a
+            # word-overlap requirement rejects it however well it matches in
+            # meaning.
+            if semantic is None:
+                overlap = len(query_terms & set(self._word_matrix[idx].nonzero()[1]))
+                if overlap < MIN_TERM_OVERLAP:
+                    continue
+                # One shared word must clear a higher bar than two — see the note
+                # on SINGLE_TERM_FLOOR. Skipped when the caller has already
+                # lowered the floor deliberately (the follow-up planner), where
+                # relevance is established by the trigger firing, not the query.
+                if overlap == 1 and floor >= self.score_floor and cos < SINGLE_TERM_FLOOR:
+                    continue
 
             words = len(p.payload["excerpt"].split())
             length_prior = min(1.0, words / LENGTH_PIVOT_WORDS) ** LENGTH_EXPONENT
@@ -274,7 +461,10 @@ class CorpusRetriever:
 
         return [
             {**p.payload, "trigger": p.trigger,
-             "relevance": round(adj, 4), "cosine": round(cos, 4)}
+             "relevance": round(adj, 4), "cosine": round(cos, 4),
+             # Whether the semantic blend contributed. Callers need this to know
+             # which scale `cosine` is on, and thus which thresholds apply.
+             "blended": semantic is not None}
             for adj, cos, p in scored[:top_k]
         ]
 
@@ -301,15 +491,28 @@ class CorpusRetriever:
                 "disclaimer": _DISCLAIMER,
             }
 
+        # Auto-ingested chunks carry trigger=None — they belong to no trigger by
+        # design, which is what keeps them out of the patient-facing path. Skip
+        # them here rather than looking up a key that does not exist.
         gaps = sorted({
             h["trigger"] for h in hits
-            if self.registry.triggers[h["trigger"]]["status"] == "evidence_gap"
+            if h.get("trigger")
+            and self.registry.triggers[h["trigger"]]["status"] == "evidence_gap"
         })
 
+        # Topically close but possibly not answering — see EMBED_FLOOR. The
+        # commonest shape is a question about the right condition but the wrong
+        # kind of information: "what dose of alteplase?" against a corpus that
+        # covers when to give it, not how much.
+        # Only meaningful when the blend ran — EMBED_CONFIDENT is on the blended
+        # scale. `blended` is reported by search() so ask() need not re-derive it.
+        marginal = (bool(hits[0].get("blended"))
+                    and hits[0].get("cosine", 0.0) < EMBED_CONFIDENT)
+
         if _synthesis_enabled():
-            answer, mode = _synthesise(question, hits)
+            answer, mode = _synthesise(question, hits, marginal=marginal)
         else:
-            answer, mode = _extractive_answer(hits), "extractive"
+            answer, mode = _extractive_answer(hits, marginal=marginal), "extractive"
 
         seen, sources = set(), []
         for h in hits:
@@ -333,6 +536,7 @@ class CorpusRetriever:
             "passages": hits,
             "sources_cited": sources,
             "related_evidence_gaps": gaps,
+            "marginal": marginal,
             "disclaimer": _DISCLAIMER,
         }
 
@@ -345,9 +549,26 @@ _DISCLAIMER = (
 )
 
 
-def _extractive_answer(hits: list[dict]) -> str:
-    """No generation. Present what was retrieved, attributed."""
-    lines = ["The following recommendations were retrieved:"]
+MARGINAL_NOTE = (
+    "These passages are on a related topic but may not answer what you asked. "
+    "The corpus covers post-stroke rehabilitation, secondary prevention and "
+    "medicines adherence — not dosing, diagnosis or acute management. Read them "
+    "as context, not as an answer."
+)
+
+
+def _extractive_answer(hits: list[dict], marginal: bool = False) -> str:
+    """No generation. Present what was retrieved, attributed.
+
+    The marginal note matters most here. Synthesis mode has the grounding
+    contract to say "these do not answer your question"; a bare passage dump has
+    nothing, so a reader could take thrombolysis timing passages as an answer to
+    a dosing question.
+    """
+    lines = []
+    if marginal:
+        lines.append(MARGINAL_NOTE + "\n")
+    lines.append("The following recommendations were retrieved:")
     for h in hits:
         lines.append(
             f"\n{h['source']['short_title']} {h['section']} "
@@ -407,19 +628,27 @@ def _format_passages(hits: list[dict]) -> str:
     )
 
 
-def _synthesise(question: str, hits: list[dict]) -> tuple[str, str]:
+def _synthesise(question: str, hits: list[dict],
+                marginal: bool = False) -> tuple[str, str]:
     """Generate an answer grounded in the retrieved passages.
 
     Returns (answer, mode). On any failure this returns the extractive answer
     with mode 'extractive' — the response never claims to be synthesised when it
     is not, because a caller cannot audit what they are told incorrectly.
     """
+    user = GROUNDING_USER.format(
+        passages=_format_passages(hits), question=question)
+    if marginal:
+        # Retrieval already suspects these do not answer the question. Say so,
+        # rather than leaving the model to work it out — rule 3 of the contract
+        # requires it, and a nudge makes compliance far more reliable.
+        user += ("\n\nNOTE: retrieval scored these as topically related but "
+                 "possibly not answering the question. Check that carefully. If "
+                 "they do not answer it, say so first and plainly, before "
+                 "reporting anything they do say.")
+
     try:
-        answer = _call_llm(
-            system=GROUNDING_SYSTEM,
-            user=GROUNDING_USER.format(
-                passages=_format_passages(hits), question=question),
-        )
+        answer = _call_llm(system=GROUNDING_SYSTEM, user=user)
         return answer, "synthesised"
     except LLMUnavailable as exc:
         return (

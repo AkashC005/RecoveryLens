@@ -60,6 +60,10 @@ PASSAGES_PER_CHECKIN = 3
 # vocabulary with a rehabilitation corpus.
 CHECKIN_FLOOR = 0.04
 
+# Concurrent narration calls. Fourteen at once would invite a rate limit; eight
+# keeps a seven-day plan to roughly two sequential rounds.
+MAX_NARRATION_WORKERS = 8
+
 
 class FollowUpError(RuntimeError):
     """Follow-up evidence file is structurally invalid. Always fatal."""
@@ -160,8 +164,12 @@ class FollowUpPlanner:
 
     @property
     def retriever(self) -> CorpusRetriever:
+        """Shared by default — see the note in selector.py. Building a separate
+        index here meant the app built the same one three times at startup."""
         if self._retriever is None:
-            self._retriever = CorpusRetriever(self.registry)
+            from .retrieval import retriever as shared
+            self._retriever = (shared if shared.registry is self.registry
+                               else CorpusRetriever(self.registry))
         return self._retriever
 
     # -------------------------------------------------------------- retrieve
@@ -235,7 +243,37 @@ class FollowUpPlanner:
             if r.get("tier") in {"elevated", "high"}
         )
 
+        # Narration runs CONCURRENTLY. Two LLM calls per check-in (clinician and
+        # caregiver) across seven check-ins is fourteen round trips; run in
+        # sequence at 2-4s each that is over a minute of a user watching a
+        # spinner, on top of the selector's own calls.
+        #
+        # They are independent — no check-in's text depends on another's — so
+        # threads are the whole fix. The API call releases the GIL while waiting,
+        # which is all this needs.
+        #
+        # Ordering is preserved by mapping results back to the original plan
+        # rather than appending as they complete: a follow-up plan that lists
+        # day 42 before day 7 because it happened to return first would be worse
+        # than the delay.
+        from concurrent.futures import ThreadPoolExecutor
+
         out = []
+        with ThreadPoolExecutor(max_workers=MAX_NARRATION_WORKERS) as pool:
+            futures = {}
+            for step in plan:
+                interval = self.intervals.get(step["day"])
+                if interval is None:
+                    continue
+                passages = self._passages_for(interval, triggers)
+                futures[step["day"]] = (
+                    passages,
+                    pool.submit(self._narrate, CLINICIAN_SYSTEM, interval,
+                                passages, flagged),
+                    pool.submit(self._narrate, CAREGIVER_SYSTEM, interval,
+                                passages, flagged),
+                )
+
         for step in plan:
             day = step["day"]
             interval = self.intervals.get(day)
@@ -254,11 +292,9 @@ class FollowUpPlanner:
                 })
                 continue
 
-            passages = self._passages_for(interval, triggers)
-            clinician, mode = self._narrate(
-                CLINICIAN_SYSTEM, interval, passages, flagged)
-            caregiver, _ = self._narrate(
-                CAREGIVER_SYSTEM, interval, passages, flagged)
+            passages, clinician_future, caregiver_future = futures[day]
+            clinician, mode = clinician_future.result()
+            caregiver, _ = caregiver_future.result()
 
             out.append({
                 "day": day,

@@ -239,11 +239,18 @@ def test_relevant_recommendation_appears_near_the_top(retriever, question, expec
         f"{question!r} -> top {within} were {sections}, expected {expect_section} among them")
 
 
+# NOTE: "which antibiotic for aspiration pneumonia?" used to be in this list and
+# was removed deliberately. It failed once the corpus grew from 39 to ~291
+# chunks, because NICE NG128 1.8.1 genuinely covers aspiration pneumonia. The
+# original assertion was measuring corpus thinness, not scope — the retriever
+# refused because we had nothing on the topic, not because the topic was out of
+# bounds. Retrieving relevant guidance for a question the corpus only partly
+# answers is correct behaviour; the grounding contract handles the rest.
 @pytest.mark.parametrize("question", [
-    "what is the correct dose of alteplase?",
-    "how do I manage a myocardial infarction?",
-    "what is the capital of France?",
-    "which antibiotic for aspiration pneumonia?",
+    "what is the correct dose of alteplase?",       # dosing: never in scope
+    "how do I manage a myocardial infarction?",     # different condition
+    "what is the capital of France?",               # not clinical at all
+    "what are the surgical options for glioma?",    # unrelated specialty
 ])
 def test_retriever_refuses_out_of_scope(retriever, question):
     """Refusal is the feature. A retriever that always answers will hand a
@@ -461,6 +468,109 @@ def test_checkin_floor_does_not_leak_into_user_questions(retriever):
     from guidance.followup import CHECKIN_FLOOR
     assert CHECKIN_FLOOR < retriever.score_floor
     assert retriever.ask("what is the correct dose of alteplase?")["answered"] is False
+
+
+# ------------------------------------------------------------------ embeddings
+# These exist because a NameError shipped in the blend path — `np.clip` was used
+# in retrieval.py without numpy imported. Nothing caught it: no embedding cache
+# existed in CI, so the branch never executed. A test suite that only ever runs
+# the fallback proves nothing about the feature, so these fake a cache and force
+# the blend to run.
+def _fake_embedding_index(retriever, query_boost: str = ""):
+    """Cache covering every passage, with unit vectors.
+
+    Real embeddings are not needed to test the plumbing — only that the blend
+    executes, the shapes line up, and the scores stay in range.
+    """
+    import numpy as np
+    from guidance.embeddings import EmbeddingIndex, text_hash
+
+    dim = 8
+    vectors = {}
+    for i, p in enumerate(retriever.passages):
+        v = np.zeros(dim, dtype=np.float32)
+        # Give the passage containing `query_boost` a distinguishable direction.
+        v[0] = 1.0 if (query_boost and query_boost in p.text.lower()) else 0.0
+        v[1 + (i % (dim - 1))] = 1.0
+        vectors[text_hash(p.text)] = v / np.linalg.norm(v)
+    return EmbeddingIndex(vectors, model="test-model")
+
+
+def _activate(retriever, index, query_vec=None):
+    import numpy as np
+    retriever._embed_index = index
+    retriever._embed_matrix = index.matrix_for([p.text for p in retriever.passages])
+    if query_vec is None:
+        query_vec = np.zeros(8, dtype=np.float32)
+        query_vec[0] = 1.0
+    retriever._embed_index.embed_query = lambda q: query_vec
+
+
+def test_blend_path_executes_without_error(retriever):
+    """The regression test for the NameError. Forces the semantic branch to run."""
+    index = _fake_embedding_index(retriever, query_boost="splints")
+    _activate(retriever, index)
+    try:
+        hits = retriever.search("are wrist splints recommended?", top_k=3,
+                                score_floor=0.0)
+        assert hits, "blend path returned nothing"
+        for h in hits:
+            assert 0.0 <= h["cosine"] <= 1.0
+    finally:
+        retriever._embed_matrix = None
+        retriever._embed_index = None
+
+
+def test_blend_changes_ranking(retriever):
+    """If the semantic score had no effect, the blend would be pointless."""
+    plain = [h["id"] for h in retriever.search("recovery", top_k=8, score_floor=0.0)]
+
+    index = _fake_embedding_index(retriever, query_boost="splints")
+    _activate(retriever, index)
+    try:
+        blended = [h["id"] for h in retriever.search("recovery", top_k=8,
+                                                     score_floor=0.0)]
+    finally:
+        retriever._embed_matrix = None
+        retriever._embed_index = None
+
+    assert plain != blended, "semantic score had no effect on ranking"
+
+
+def test_stale_cache_is_rejected_not_partially_used(retriever):
+    """Partial coverage would score some passages semantically and others at
+    zero, ranking the embedded ones higher for reasons unrelated to relevance."""
+    index = _fake_embedding_index(retriever)
+    index.vectors.pop(next(iter(index.vectors)))          # drop one passage
+    assert index.matrix_for([p.text for p in retriever.passages]) is None
+
+
+def test_query_embedding_failure_falls_back_to_tfidf(retriever):
+    index = _fake_embedding_index(retriever)
+    _activate(retriever, index)
+    retriever._embed_index.embed_query = lambda q: None   # simulate API failure
+    try:
+        hits = retriever.search("are wrist splints recommended?", top_k=2,
+                                score_floor=0.0)
+        assert hits, "should still return TF-IDF results"
+    finally:
+        retriever._embed_matrix = None
+        retriever._embed_index = None
+
+
+def test_overlap_gates_are_skipped_when_semantics_are_active(retriever):
+    """The gates are a TF-IDF patch. Left on, they would reject the paraphrase
+    cases embeddings were added to fix."""
+    index = _fake_embedding_index(retriever)
+    _activate(retriever, index)
+    try:
+        # A query sharing no whole word with any passage still returns results,
+        # because ranking is now semantic.
+        hits = retriever.search("zzz qqq", top_k=2, score_floor=0.0)
+        assert hits
+    finally:
+        retriever._embed_matrix = None
+        retriever._embed_index = None
 
 
 def test_length_prior_does_not_promote_below_floor_matches(retriever):

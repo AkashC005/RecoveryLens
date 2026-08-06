@@ -25,6 +25,7 @@ from guidance.retrieval import _synthesis_enabled as _synthesis_on
 from triage import TriageAgent, agent_enabled
 
 from .triage_tools import DatabaseToolBox
+from .webhooks import router as messaging_router
 
 from .database import Assessment, CheckIn, Patient, get_db, init_db, utcnow
 from .predictor import predictor
@@ -53,6 +54,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(messaging_router)
 
 
 @app.on_event("startup")

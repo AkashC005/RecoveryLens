@@ -22,3 +22,13 @@ shap==0.46.0
 # (~2MB, so leaving it installed costs nothing on the 512MB tier).
 # Retrieval itself uses scikit-learn TF-IDF — no torch, no faiss.
 anthropic==0.40.0
+
+# Loads .env at import so the feature flags and API key persist across
+# terminals. api/__init__.py has a minimal fallback parser if this is absent,
+# so a missing install degrades rather than silently disabling every agent.
+python-dotenv==1.0.1
+
+# WhatsApp/SMS delivery and inbound signature validation. Imported lazily, so
+# the app runs without it — build_sender() falls back to ConsoleSender and the
+# webhook refuses to accept unsigned requests rather than trusting them.
+twilio==9.3.7

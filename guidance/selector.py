@@ -201,14 +201,30 @@ class GuidanceSelector:
     def __init__(self, reg: Registry | None = None,
                  retriever: CorpusRetriever | None = None,
                  model: str | None = None):
-        self.registry = reg or default_registry
+        # `is default_registry` matters below, so keep the identity rather than
+        # loading a fresh copy.
+        self.registry = reg if reg is not None else default_registry
         self._retriever = retriever
         self.model = model or os.getenv("RECOVERYLENS_LLM_MODEL", DEFAULT_MODEL)
 
     @property
     def retriever(self) -> CorpusRetriever:
+        """Shared by default, not per-instance.
+
+        Building a TF-IDF index over 291 chunks with character n-grams is not
+        free, and this used to build its own — as did the follow-up planner —
+        so the app constructed the same index three times at startup. Invisible
+        at 39 chunks; several seconds at 291, and it made the test suite time
+        out because each test created a fresh selector.
+
+        An explicitly injected retriever still wins, which is what the tests use
+        when they need a controlled corpus.
+        """
         if self._retriever is None:
-            self._retriever = CorpusRetriever(self.registry)
+            from .retrieval import retriever as shared
+            # Only reuse the shared index if it was built over the same corpus.
+            self._retriever = (shared if shared.registry is self.registry
+                               else CorpusRetriever(self.registry))
         return self._retriever
 
     # ------------------------------------------------------------------ tools
@@ -226,12 +242,27 @@ class GuidanceSelector:
         return out
 
     def _search(self, query: str) -> list[dict]:
+        """Check what the corpus says about a topic.
+
+        Results may include auto-ingested chunks, which belong to no trigger.
+        Those are useful for judging whether the corpus covers something, but
+        they are NOT selectable topics — `topic` is null for them and
+        `selectable` says so, so the agent cannot mistake a chunk it read for a
+        topic it may choose. `_accept()` enforces the same rule again on the way
+        back in.
+        """
         try:
-            return [
-                {"source": h["source"]["short_title"], "section": h["section"],
-                 "topic": h["trigger"], "excerpt": h["excerpt"]}
-                for h in self.retriever.search(query, top_k=3)
-            ]
+            out = []
+            for h in self.retriever.search(query, top_k=3):
+                trigger = h.get("trigger")
+                out.append({
+                    "source": h["source"]["short_title"],
+                    "section": h["section"],
+                    "topic": trigger,
+                    "selectable": trigger is not None,
+                    "excerpt": h["excerpt"],
+                })
+            return out
         except Exception as exc:
             return [{"error": type(exc).__name__}]
 

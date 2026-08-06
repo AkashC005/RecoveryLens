@@ -284,13 +284,38 @@ export const api = {
 
   escalations: () => request<Escalation[]>("/api/escalations"),
 
-  /** Whether the triage agent is actually running. A silently disabled agent
+  /** Which model-driven features are actually live. A silently disabled agent
    *  looks identical to one that found nothing — worth checking before a demo. */
-  triageStatus: () =>
-    request<{ agent_enabled: boolean; api_key_configured: boolean; note: string }>(
-      "/api/triage/status",
-    ),
+  triageStatus: () => request<AiStatus>("/api/triage/status"),
 };
+
+// ------------------------------------------------------------------- status
+/** Mirrors GET /api/triage/status.
+ *
+ *  NOTE: this shape changed when the endpoint grew from reporting one flag to
+ *  reporting all three. The frontend was not updated at the time, so the Review
+ *  tab read `status.agent_enabled` — which no longer existed — and displayed
+ *  "Triage agent is off" while the agent was demonstrably running. Silent
+ *  undefined is exactly the failure mode this endpoint exists to prevent, so
+ *  the type is now explicit. */
+export interface AiFeature {
+  enabled: boolean;
+  env: string;
+  what: string;
+  fallback: string;
+}
+
+export interface AiStatus {
+  api_key_configured: boolean;
+  features: {
+    guidance_selection: AiFeature;
+    checkin_narratives: AiFeature;
+    triage_agent: AiFeature;
+  };
+  live: string[];
+  all_live: boolean;
+  note: string;
+}
 
 // ------------------------------------------------------------------- triage
 export type Urgency = "routine" | "soon" | "urgent";

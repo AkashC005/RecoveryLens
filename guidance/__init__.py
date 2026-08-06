@@ -22,13 +22,39 @@ return the object rather than the module - a confusing failure that only shows u
 under reload or introspection. Import the modules by path if you need them.
 """
 
-from .registry import (  # noqa: F401
+import sys as _sys
+from pathlib import Path as _Path
+
+# Load .env on package import, not just from the CLIs.
+#
+# This was the second time the same bug bit: config was loaded by api/__init__.py
+# and by each guidance CLI, but NOT by the package itself. So any script doing
+#
+#     from guidance.retrieval import retriever
+#
+# ran with no environment — embeddings silently disabled, RECOVERYLENS_* flags
+# all unset — and produced results that looked plausible and were wrong. The API
+# worked, the CLIs worked, ad-hoc scripts quietly did not.
+#
+# Loading here covers every import path into the package. Tests clear these vars
+# in tests/conftest.py before collection, so the suite still runs against the
+# deterministic defaults.
+_ROOT = _Path(__file__).resolve().parent.parent
+if str(_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_ROOT))
+try:
+    from config import load_env as _load_env
+    _load_env()
+except ImportError:      # pragma: no cover - config.py should always be present
+    pass
+
+from .registry import (  # noqa: F401,E402
     CANONICAL_TRIGGERS,
     GuidanceError,
     Registry,
     UnknownTrigger,
 )
-from .registry import registry as guidance_registry  # noqa: F401
+from .registry import registry as guidance_registry  # noqa: F401,E402
 
 __all__ = [
     "guidance_registry",

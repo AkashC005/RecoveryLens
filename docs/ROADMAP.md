@@ -39,18 +39,42 @@ Three sandbox constraints to know before demo day:
 
 ---
 
-## Order
+## Status
 
-| # | Feature | Hours | Blocked by |
-|---|---|---|---|
-| 1 | IST-3 external validation | 10–14 | — |
-| 2 | Conformal prediction | 5–7 | 1 (uses IST-3 as external calibration) |
-| 3 | Escalation triage agent | 10–14 | — (builds the check-in form) |
-| 4 | WhatsApp/SMS check-ins | 8–12 | 3 |
-| 5 | Multilingual voice guidance | 14–20 | 3 and 4 |
+| # | Feature | Status |
+|---|---|---|
+| 1 | IST-3 external validation | **Done** |
+| 2 | Conformal prediction | **Done — tested and rejected.** Degraded calibration 12–42%; script and negative result kept, not wired in |
+| 3 | Escalation triage agent | **Done** |
+| 4 | WhatsApp/SMS check-ins | **Done — verified live end to end** |
+| 5 | Multilingual voice guidance | **Inbound voice done. Two pieces remain — see below** |
 
-**Critical path: 1 → 3 → 4 → 5.** Feature 2 is additive and can slip without
-breaking anything downstream.
+### REMAINING in feature 5
+
+**Outbound voice (TTS delivery).** `voice/speech.py::synthesise()` produces audio,
+but nothing sends it. Twilio media messages need a **publicly reachable URL** for
+the audio file, which means hosting it somewhere — S3, or a `/media/{id}` route
+serving from disk. Real infrastructure, deliberately not half-built. Carers
+currently receive text and reply by voice, which is the direction that matters
+most for low literacy.
+
+**Translation.** Built English-only by choice, so translation quality could not
+mask voice bugs. Adding Tamil/Hindi means translating the generated caregiver
+messages (never the quoted guideline text), a back-translation check, and a
+language field on `Patient`.
+
+### Twilio — done, with two gotchas for demo day
+
+Full round trip verified: check-in sent → carer replies in plain English →
+webhook → triage agent → urgent escalation → clinician inbox → confirmation back.
+
+**Before you demo:**
+
+- **ngrok's URL changes every restart.** Update BOTH the Twilio console and
+  `TWILIO_WEBHOOK_URL` in `.env`, then restart uvicorn. Miss either and inbound
+  silently stops — the send still works, so it looks fine until nobody replies.
+- **Reopen the 24-hour window.** Message the sandbox from the demo phone shortly
+  beforehand, or the outbound send fails with `21654`.
 
 ---
 
