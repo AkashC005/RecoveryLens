@@ -32,3 +32,8 @@ python-dotenv==1.0.1
 # the app runs without it — build_sender() falls back to ConsoleSender and the
 # webhook refuses to accept unsigned requests rather than trusting them.
 twilio==9.3.7
+
+# Background sending of scheduled check-ins (messaging/scheduler.py).
+# Only starts when RECOVERYLENS_SCHEDULER=1; a missing install logs and is
+# skipped rather than failing startup.
+apscheduler==3.11.0

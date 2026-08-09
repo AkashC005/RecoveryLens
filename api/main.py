@@ -27,7 +27,8 @@ from triage import TriageAgent, agent_enabled
 from .triage_tools import DatabaseToolBox
 from .webhooks import router as messaging_router
 
-from .database import Assessment, CheckIn, Patient, get_db, init_db, utcnow
+from .database import (Assessment, CheckIn, Patient, SessionLocal, get_db,
+                       init_db, utcnow)
 from .predictor import predictor
 from .schemas import (AssessmentRequest, AssessmentResponse, CheckInResponse,
                       CheckInSubmission, GuidanceAnswer, GuidanceBlock,
@@ -58,6 +59,9 @@ app.add_middleware(
 
 app.include_router(messaging_router)
 
+# Held so the shutdown hook can stop it. None when scheduling is disabled.
+_scheduler = None
+
 
 @app.on_event("startup")
 def startup() -> None:
@@ -80,7 +84,31 @@ def startup() -> None:
           f"{fu['total_citations']} citations. "
           f"Operational: {fu['by_basis']['operational']}. "
           f"Trial convention: {fu['by_basis']['trial_convention']}.")
+
+    # Background sending. Off unless RECOVERYLENS_SCHEDULER=1 — a job that
+    # messages patients' families should never start by accident. Failure to
+    # start is logged and swallowed; the API must serve requests regardless.
+    global _scheduler
+    try:
+        from messaging.scheduler import start as start_scheduler
+        _scheduler = start_scheduler(SessionLocal)
+    except Exception as exc:
+        print(f"[scheduler] could not start ({type(exc).__name__}: {exc}). "
+              f"Check-ins can still be sent manually.")
+
     print("Ready.")
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    """Stop the scheduler cleanly so a reload does not leave a job thread
+    sending messages from a half-dead process."""
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+            print("[scheduler] stopped.")
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------- meta

@@ -232,10 +232,23 @@ class GuidanceQuestion(BaseModel):
 
 
 class RetrievedPassage(GuidanceEntry):
-    trigger: str
+    trigger: str | None = Field(
+        None,
+        description="The guidance topic this passage belongs to, or null for "
+                    "auto-ingested chunks. Null is not a defect: chunks from "
+                    "corpus_full.json belong to no trigger by design, and that "
+                    "is what keeps them out of the deterministic patient-facing "
+                    "path, which filters on trigger membership.")
     relevance: float = Field(
         ..., description="Ranking score after length and fragment priors.")
     cosine: float = Field(..., description="Raw TF-IDF cosine, before priors.")
+    blended: bool = Field(
+        False, description="Whether the semantic blend contributed to `cosine`. "
+                           "Determines which thresholds apply to it.")
+    extraction: Literal["curated", "automatic"] = Field(
+        "curated",
+        description="'curated' = hand-verified section number. 'automatic' = "
+                    "parsed from the source document, not human-checked.")
 
 
 class GuidanceAnswer(BaseModel):

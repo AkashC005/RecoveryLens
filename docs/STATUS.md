@@ -1,6 +1,11 @@
 # RecoveryLens — status
 
-199 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
+216 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
+
+**Last verified:** 9 Aug 2026 — full 13-step walkthrough (`docs/WALKTHROUGH.md`)
+run from an empty database. Steps 1–10 confirmed live, including a real WhatsApp
+round trip. Steps 11–13 (opt-out, scheduler, voice) not yet re-run after the
+STOP correction.
 
 ---
 
@@ -126,14 +131,28 @@ check-in history and the risk profile:
   API calls — and had to set vars to `""` rather than delete them, because
   `load_env` runs later during collection with `override=False`.
 
+### Scheduler
+`messaging/scheduler.py` — APScheduler, off by default (`RECOVERYLENS_SCHEDULER=1`).
+Polls every 15 min for due check-ins and sends each through the *same* policy gate
+as the API; every 30 min escalates voice transcripts a carer never confirmed.
+Never early, never twice, capped at 25 per run, `coalesce=True` so a laptop waking
+from sleep does not fire a backlog of missed runs at once.
+
 ---
 
 ## Pending
 
 ### Quick (under an hour, no code)
-- [ ] **Commit `guidance/embeddings.npz`** (1.4 MB). Untracked at present, so
-      anyone cloning the repo — including a judge — gets TF-IDF-only behaviour
-      with no obvious sign why.
+- [ ] **Commit the working tree.** Uncommitted: the webhook `BackgroundTasks` fix,
+      `_apply_rules_only`, the TwiML content-type fix, the `RetrievedPassage`
+      schema fix, `messaging/scheduler.py`, `tests/test_scheduler.py`, and
+      `docs/WALKTHROUGH.md`. The two most valuable bug fixes of the week are in
+      here and only in here.
+- [ ] **Finish walkthrough steps 11–13** — opt-out (via API, not WhatsApp STOP),
+      scheduler, voice.
+- [x] ~~Commit `guidance/embeddings.npz`~~ — tracked (1.4 MB, 291 vectors,
+      `text-embedding-3-small`). A fresh clone now gets hybrid retrieval, not
+      silently degraded TF-IDF.
 - [x] ~~Twilio account setup~~ — done and verified live. Two gates that were not
       in the original guide and are now documented: trial accounts restrict
       recipients to Verified Caller IDs (572002), and paid accounts require an
@@ -156,11 +175,11 @@ check-in history and the risk profile:
       could not mask voice bugs. Needs: translate the generated caregiver
       messages only (never quoted guideline text), a back-translation check, and
       a language field on `Patient`.
-- [ ] **Scheduler.** `POST /api/checkins/{id}/send` does the work; nothing calls
-      it automatically. An APScheduler job polling `/api/checkins/due` plus
-      `escalate_unconfirmed_voice()` closes this.
+- [x] ~~Scheduler~~ — built, 17 tests, documented above.
 - [ ] **Deployment.** `render.yaml` exists but has never been deployed. Note the
-      free tier sleeps after 15 minutes — warm it before presenting.
+      free tier sleeps after 15 minutes — warm it before presenting. Deliberately
+      last: everything else is testable locally, and a deployed copy of a moving
+      target is wasted effort.
 
 ### Known limitations worth stating rather than hiding
 - **WhatsApp 24-hour window — verified, not assumed.** Free-form messages are
@@ -172,6 +191,9 @@ check-in history and the risk profile:
   which is precisely why you are messaging them — so production needs
   Meta-approved templates for the outbound prompt. The carer's reply then opens
   a window and everything downstream works free-form as built.
+- **Voice is built and tested but not switched on in your `.env`.** `RECOVERYLENS_VOICE`
+  is unset, so `NullSpeech` is active and voice notes are not transcribed. Set it
+  before demonstrating that feature.
 - **Voice is English-only.** Accuracy falls hardest on code-switched speech —
   English clinical terms inside Tamil or Hindi — which is what Indian carers
   actually use.

@@ -30,14 +30,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
+                     Request, Response)
 from sqlalchemy.orm import Session
 
 from messaging import (
     compose_checkin, compose_confirmation, compose_stop_confirmation,
     is_stop_request, may_send, parse_reply,
 )
+from triage import agent_enabled
 from voice import ConfirmationState, compose_discarded, is_confirmation
+
+from .triage_tools import DatabaseToolBox
 
 from .database import CheckIn, Patient, get_db, utcnow
 
@@ -102,7 +106,8 @@ def _validate_signature(request: Request, form: dict) -> None:
 
 
 @router.post("/api/webhooks/twilio")
-async def twilio_inbound(request: Request, db: Session = Depends(get_db)):
+async def twilio_inbound(request: Request, background: BackgroundTasks,
+                         db: Session = Depends(get_db)):
     """Inbound WhatsApp/SMS. Returns TwiML; Twilio speaks the <Message> back.
 
     The body is parsed with `urllib.parse.parse_qs` rather than FastAPI's
@@ -174,12 +179,22 @@ async def twilio_inbound(request: Request, db: Session = Depends(get_db)):
 
     parsed = parse_reply(text)
 
-    # Submitted through the same path as the web form so the rules and the
-    # triage agent behave identically regardless of channel.
-    from .main import submit_checkin
+    # Rules now, agent later.
+    #
+    # Twilio abandons a webhook after roughly 15 seconds. The triage agent makes
+    # several Claude tool-calls and regularly takes longer, so running it inline
+    # meant the work completed but the reply never reached the carer — ngrok
+    # showed the POST with no status at all.
+    #
+    # So: apply the deterministic rules, persist, and answer immediately. The
+    # agent runs in the background and can only ADD to what the rules decided,
+    # which is the same monotonic guarantee as before — it is simply applied a
+    # few seconds later. A carer waiting on a reply gets one; a clinician sees
+    # the agent's contribution when it lands.
     from .schemas import CheckInSubmission
 
-    result = submit_checkin(checkin.id, CheckInSubmission(**parsed.to_submission()), db)
+    submission = CheckInSubmission(**parsed.to_submission())
+    result = _apply_rules_only(checkin, submission, db)
 
     # Record how the reply was read, so a clinician reviewing an escalation can
     # see whether a boolean came from the carer or from a parser default.
@@ -191,7 +206,97 @@ async def twilio_inbound(request: Request, db: Session = Depends(get_db)):
     checkin.triage = stored
     db.commit()
 
-    return _twiml(compose_confirmation(result["escalated"], result.get("urgency", "routine")))
+    # Hand the agent off to a background thread. The response goes out now.
+    if agent_enabled() and (parsed.free_text or "").strip():
+        background.add_task(_run_triage_agent, checkin.id,
+                            parsed.free_text or "", list(result["rule_reasons"]))
+
+    return _twiml(compose_confirmation(result["escalated"],
+                                       result.get("urgency", "routine")))
+
+
+def _apply_rules_only(checkin: CheckIn, sub, db: Session) -> dict:
+    """The deterministic half of a check-in, without the agent.
+
+    Deliberately mirrors the rule block in main.py::submit_checkin. Kept
+    separate so the webhook can answer Twilio inside its timeout while the
+    agent runs afterwards.
+    """
+    reasons = []
+    if not sub.taking_medication:
+        reasons.append("Medication not being taken")
+    if sub.new_symptoms:
+        reasons.append("New symptoms reported")
+    if sub.worse_than_last_week:
+        reasons.append("Condition reported as worsening")
+
+    checkin.responses = sub.model_dump()
+    checkin.completed_at = utcnow()
+    checkin.escalated = bool(reasons)
+    checkin.escalation_reason = "; ".join(reasons) if reasons else None
+    checkin.urgency = "soon" if reasons else "routine"
+    checkin.triage = {
+        "escalated": bool(reasons),
+        "escalation_reason": checkin.escalation_reason,
+        "rule_reasons": reasons,
+        "agent_reasons": [],
+        "urgency": checkin.urgency,
+        "agent_summary": "",
+        "tool_calls": [],
+        "mode": "rules_only",
+        "agent_error": None,
+        "agent_pending": True,
+    }
+    db.commit()
+
+    return {"escalated": bool(reasons), "urgency": checkin.urgency,
+            "rule_reasons": reasons}
+
+
+def _run_triage_agent(checkin_id: int, free_text: str,
+                      rule_reasons: list[str]) -> None:
+    """Run the agent after the webhook has already replied.
+
+    Its own session — the request's is closed by the time this runs. Failure is
+    logged and swallowed: the rules have already been applied and persisted, so
+    the worst case is a check-in escalated on rules alone, which is exactly the
+    behaviour with the agent disabled.
+    """
+    from triage import TriageAgent
+
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        checkin = db.query(CheckIn).filter(CheckIn.id == checkin_id).first()
+        if checkin is None:
+            return
+
+        result = TriageAgent(DatabaseToolBox(db)).run(
+            free_text=free_text, rule_escalations=rule_reasons,
+            patient_id=checkin.patient_id,
+        ).finalise()
+
+        # finalise() guarantees the rule reasons survive, so this cannot
+        # downgrade what the rules already decided.
+        inbound = (checkin.triage or {}).get("inbound")
+        checkin.escalated = result["escalated"]
+        checkin.escalation_reason = result["escalation_reason"]
+        checkin.urgency = result["urgency"]
+        result["agent_pending"] = False
+        if inbound:
+            result["inbound"] = inbound
+        checkin.triage = result
+        db.commit()
+
+        print(f"[triage] check-in {checkin_id}: {result['mode']}, "
+              f"{len(result['agent_reasons'])} agent reason(s), "
+              f"urgency {result['urgency']}")
+    except Exception as exc:
+        print(f"[triage] background run failed for check-in {checkin_id}: "
+              f"{type(exc).__name__}: {exc}")
+    finally:
+        db.close()
 
 
 @router.post("/api/checkins/{checkin_id}/send", tags=["messaging"])

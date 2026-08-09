@@ -573,6 +573,60 @@ def test_overlap_gates_are_skipped_when_semantics_are_active(retriever):
         retriever._embed_index = None
 
 
+# --------------------------------------------------- API response validation
+# The Ask endpoint returned 500 in production while the whole suite was green.
+# `RetrievedPassage.trigger` was typed `str`, but auto-ingested chunks carry
+# trigger=None by design. It never surfaced in tests because corpus_full.json
+# ships empty, so no ingested chunk ever reached the schema — the same shape of
+# gap as the numpy import: a path that only executes with real data.
+def test_ask_response_validates_with_ingested_chunks(retriever, reg):
+    """Force an ingested-style passage through the Pydantic model."""
+    from api.schemas import GuidanceAnswer
+
+    hits = retriever.search("are wrist splints recommended?", top_k=2,
+                            score_floor=0.0)
+    assert hits, "probe question returned nothing"
+
+    # Mimic what corpus_full.json produces: no trigger, automatic extraction.
+    for h in hits:
+        h["trigger"] = None
+        h["extraction"] = "automatic"
+
+    payload = {
+        "question": "are wrist splints recommended?", "answered": True,
+        "mode": "extractive", "answer": "…", "passages": hits,
+        "sources_cited": [], "related_evidence_gaps": [], "disclaimer": "…",
+    }
+    parsed = GuidanceAnswer.model_validate(payload)
+    assert parsed.passages[0].trigger is None
+    assert parsed.passages[0].extraction == "automatic"
+
+
+def test_ask_response_validates_with_curated_chunks(retriever):
+    """The other half — a curated passage must still validate."""
+    from api.schemas import GuidanceAnswer
+
+    hits = retriever.search("are wrist splints recommended?", top_k=1,
+                            score_floor=0.0)
+    parsed = GuidanceAnswer.model_validate({
+        "question": "q", "answered": True, "mode": "extractive", "answer": "…",
+        "passages": hits, "sources_cited": [], "related_evidence_gaps": [],
+        "disclaimer": "…",
+    })
+    assert parsed.passages[0].trigger in CANONICAL_TRIGGERS
+    assert parsed.passages[0].extraction == "curated"
+
+
+def test_every_search_result_field_survives_the_schema(retriever):
+    """Guards the whole shape, not just `trigger` — search() has gained fields
+    (blended, extraction) that the schema must keep up with."""
+    from api.schemas import RetrievedPassage
+
+    for h in retriever.search("how is dysphagia managed?", top_k=3,
+                              score_floor=0.0):
+        RetrievedPassage.model_validate(h)
+
+
 def test_length_prior_does_not_promote_below_floor_matches(retriever):
     """Priors reorder relevant passages; they must never lift an irrelevant one
     over the refusal threshold."""
