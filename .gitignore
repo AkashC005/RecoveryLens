@@ -31,3 +31,7 @@ ml/models/
 # outputs/         reports and figures the Evidence screen reads
 # ml/data/         IST-1 and IST-3 are public data; committing them keeps the
 #                  pipeline reproducible
+# Hand-downloaded guideline PDFs. Third-party publications — committing them
+# would be redistribution. See guidance/sources/README.md.
+guidance/sources/*
+!guidance/sources/README.md

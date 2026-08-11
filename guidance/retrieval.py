@@ -53,17 +53,27 @@ from sklearn.pipeline import FeatureUnion
 
 from .registry import Registry, registry as default_registry
 
-# Cosine similarity below this means nothing in the corpus is relevant. Tuned
-# against the probe queries in tests/test_retrieval.py — if you change it, re-run
-# them, because this single number is what stands between a clinician and a
-# confidently wrong answer.
-# Measured, not guessed. Across the probe set in tests/test_guidance.py the
-# lowest-scoring legitimate question lands at 0.248 and the highest-scoring
-# out-of-scope question ("how do I manage raised intracranial pressure?") at
-# 0.196. 0.22 sits in that gap. Re-run the probes if you touch the vectoriser,
-# because this number is the only thing standing between a clinician and a
-# confidently irrelevant recommendation.
-SCORE_FLOOR = 0.22
+# Refusal threshold for the TF-IDF-ONLY path — no embeddings cache, no key, or a
+# query embedding that failed. The blended path uses EMBED_FLOOR instead; the two
+# are on different scales and must never be compared.
+#
+# Measured, not guessed, via `python -m guidance.tune_floor` with embeddings off.
+# At 803 passages:
+#
+#   highest out-of-scope  0.222  "how do I manage a myocardial infarction?"
+#   everything else out of scope  0.000
+#
+# 0.22 — the previous value, measured at 291 passages — now sits BELOW the
+# myocardial-infarction question, so the degraded path would answer it. Same
+# regression as EMBED_FLOOR and from the same cause: a denser corpus raises every
+# score, including the ones that must be refused. 0.24 clears it.
+#
+# This costs refusals in degraded mode, and that is the correct direction: with no
+# semantic matching the retriever knows less, so it should claim less. Several of
+# the low in-scope scores here are artefacts of the single-term rule below rather
+# than genuine coverage gaps — a one-content-word question like "how do I assess
+# cognition?" must clear SINGLE_TERM_FLOOR, which the blended path skips entirely.
+SCORE_FLOOR = 0.24
 
 TOP_K = 4
 
@@ -102,6 +112,16 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "meds": ("medicines", "medication"),
     "medication": ("medicines",),
     "medicines": ("medication",),
+    # Drug class to the register the guidelines use. "should statins be
+    # continued?" scored 0.366 — the lowest in-scope score in the 803-passage
+    # measurement, and the only question the measured floor refuses — while the
+    # corpus holds NG128 1.4.22 ("Continue statin treatment in people with acute
+    # stroke who are already receiving statins") and RCP 5.5 B. The answer was
+    # there; the words were not. Same-meaning only, per the rule above: a statin
+    # IS lipid-lowering therapy. Query side only, so the index is untouched.
+    "statin": ("lipid", "lipid-lowering", "cholesterol"),
+    "statins": ("lipid", "lipid-lowering", "cholesterol"),
+    "cholesterol": ("lipid",),
     "compliance": ("adherence",),
     "noncompliance": ("non-adherence", "adherence"),
     "adherence": ("non-adherence",),
@@ -154,35 +174,59 @@ MIN_TERM_OVERLAP = 1
 SINGLE_TERM_FLOOR = 0.30
 
 # Refusal threshold when embeddings are blended in. MEASURED via
-# `python -m guidance.tune_floor` over 291 chunks; re-run it if the corpus changes.
+# `python -m guidance.tune_floor`. RE-RUN IT WHENEVER THE CORPUS CHANGES — this
+# number is a property of the corpus, not of the code.
 #
-# The measurement showed no clean threshold, and the reason matters:
+# ---------------------------------------------------------------------------
+# FINAL measurement at 774 passages (39 curated + 735 ingested, NICE + RCP,
+# after duplicate suppression). CLEAN SEPARATION:
 #
-#   in scope, lowest      0.285  "what about sexual function?"
-#   out of scope, highest 0.379  "what is the correct dose of alteplase?"
-#                         0.331  "how do I manage a myocardial infarction?"
-#                         0.280  "what are the surgical options for glioma?"
-#   plainly unrelated     0.171  meningitis · 0.156 hernia · 0.072 France
+#   in scope, lowest      0.418  "what about sexual function?"
+#   out of scope, highest 0.392  "what is the correct dose of alteplase?"
+#                         0.351  "how do I manage a myocardial infarction?"
+#                         0.282  "what are the surgical options for glioma?"
+#   plainly unrelated     0.180  meningitis · 0.161 hernia · 0.075 France
 #
-# The three high out-of-scope scores are not retrieval errors. Alteplase is a
-# stroke drug and NG128 covers thrombolysis, so the embedding is right that the
-# question is stroke-related — the corpus simply holds no DOSING information.
-# That is a category error, not an irrelevance.
+# The previous value was 0.28, measured at 291 passages. Keeping it would have
+# been a SAFETY REGRESSION, not merely a stale constant: at 0.28 the alteplase,
+# myocardial-infarction and glioma questions all clear the floor, so the retriever
+# would have answered "how do I manage a myocardial infarction?" with stroke
+# recommendations and a citation. Expanding the corpus raised every score,
+# including the ones that must be refused. That is the specific hazard of adding
+# coverage, and it is why this number is measured rather than chosen.
 #
-# A floor above them (0.389) would discard 7 legitimate questions to block 3 that
-# are genuinely on topic. So the floor sits below the plainly-unrelated cluster
-# instead, and questions landing in the band above it are marked `marginal`:
-# passages are returned, and the answer says plainly that they may not address
-# what was asked. The grounding contract already requires exactly that.
+# Getting to clean separation took two fixes, neither of which was lowering the
+# floor:
 #
-# Refusal at retrieval time was a patch for a corpus too thin to retrieve
-# anything useful. At 291 chunks the honest division of labour is: retrieval
-# finds what is topically close, and the answer is honest about sufficiency.
-EMBED_FLOOR = 0.28
+#   1. The statin synonyms below. "should statins be continued?" was the lowest
+#      in-scope score at 0.366 — the one question an above-the-ceiling floor would
+#      have refused — while the corpus held NG128 1.4.22 and RCP 5.5 B. A
+#      retrieval failure, not a coverage gap. Adding statin -> lipid moved it to
+#      0.436, a gain of 0.070.
+#   2. Suppressing the 29 curated recommendations that ingestion re-extracted as
+#      chunks, which had been competing with their own hand-verified copies.
+#
+# Margin: 0.026 (0.392 -> 0.418). Narrow but real. Alteplase stays high because it
+# IS a stroke drug and both NG128 and RCP 3.5 cover thrombolysis — the corpus holds
+# indications, timing and service requirements but no dosing at all (`mg/kg`
+# appears in zero chunks). A category error, not an irrelevance.
+EMBED_FLOOR = 0.405
 
 # Above this, retrieval is confident the passages address the question. Between
-# EMBED_FLOOR and here, they are topically close but may not answer it.
-EMBED_CONFIDENT = 0.42
+# EMBED_FLOOR and here, they are topically close but may not answer it, and the
+# answer says so.
+#
+# Widened from 0.42 to 0.44. The band 0.405-0.44 holds the five in-scope questions
+# closest to the out-of-scope ceiling: sexual function (0.418), blood pressure
+# monitoring (0.419), the six-month review (0.425), carer support (0.431) and
+# statins (0.436). All five are answered; all five carry the note saying the
+# passages may not address what was asked.
+#
+# Five hedges out of 25 is more than before, and correct: with only 0.026 between
+# the lowest in-scope and highest out-of-scope score, a question in the lower part
+# of the in-scope range is genuinely close to one the retriever would refuse. The
+# hedge costs a sentence. Silent confidence there would cost trust.
+EMBED_CONFIDENT = 0.44
 
 # Cosine similarity over TF-IDF systematically favours short documents: with
 # fewer terms in the vector, each match carries more weight. Left uncorrected,
@@ -206,6 +250,58 @@ def _expand(text: str) -> str:
     for t in tokens:
         extra.extend(SYNONYMS.get(t, ()))
     return text + " " + " ".join(extra)
+
+
+# At most this many of the returned passages may be ones whose citation points at
+# a whole section rather than a recommendation. ISA numbers sections but not
+# recommendations, so its chunks can only cite "§12.0" — several pages.
+#
+# Without a cap, a question well matched by ISA's rehabilitation section returns
+# four passages that all cite §12.0, and the answer is built entirely on
+# references a reader cannot check precisely. The cap does not suppress them: a
+# coarse passage still appears, and appears first if it ranks first. It just
+# cannot become the whole basis of a response.
+#
+# Set to a share rather than a constant so it scales with top_k: at the default
+# top_k=4 it allows 2.
+MAX_COARSE_SHARE = 0.5
+
+
+def _cap_coarse_citations(scored: list[tuple[float, float, "Passage"]],
+                          top_k: int) -> list[tuple[float, float, "Passage"]]:
+    """Take the top `top_k`, limiting section-precision passages to a share.
+
+    Relative order within each precision level is preserved. Coarse passages
+    beyond the quota are DEMOTED to the end rather than dropped, so a coarse
+    passage ranked second can end up below a precise one ranked seventh. That is
+    a deliberate reordering and the only one in the retriever: dropping the
+    passage would lose real content, and leaving it high would let a section-level
+    citation dominate an answer.
+    """
+    quota = max(1, int(top_k * MAX_COARSE_SHARE))
+    out: list[tuple[float, float, "Passage"]] = []
+    deferred: list[tuple[float, float, "Passage"]] = []
+    used = 0
+
+    for item in scored:
+        if len(out) >= top_k:
+            break
+        coarse = item[2].payload.get("citation_precision") == "section"
+        if coarse and used >= quota:
+            deferred.append(item)
+            continue
+        out.append(item)
+        used += 1 if coarse else 0
+
+    # If there was nothing precise to backfill with, the coarse ones are all we
+    # have. Returning fewer passages than exist would be a worse answer, and the
+    # caveat on each already says the citation is section-level.
+    for item in deferred:
+        if len(out) >= top_k:
+            break
+        out.append(item)
+
+    return out
 
 
 def _source_ref(src) -> dict:
@@ -242,38 +338,68 @@ class CorpusRetriever:
 
     # ------------------------------------------------------------------- index
     def _load_ingested(self) -> list[Passage]:
-        """Auto-extracted chunks from guidance/corpus_full.json, if present.
+        """Auto-extracted chunks from the `chunks` block of corpus.json.
 
         These exist because the hand-curated corpus was measurably too small:
         across 25 realistic clinician questions the retriever refused 16 (64%),
         including spasticity, fatigue and cognition — all of which NICE NG236
         covers. Hand-curation gave precise citations and poor coverage.
 
-        They are indexed for Q&A ONLY. `trigger` is set to None so the
-        deterministic trigger lookup and the follow-up planner cannot reach them:
-        patient-facing guidance stays on hand-verified text. Each carries
-        `extraction: "automatic"` so the UI can say which it is showing.
+        They used to live in a separate `corpus_full.json`. The two files are now
+        one, and the tier is carried by `extraction: "automatic"` rather than by
+        the absence of a trigger. `trigger` is still None, so the deterministic
+        lookup and the follow-up planner cannot reach them — but that is now a
+        consequence of the tier rather than the definition of it.
         """
-        path = HERE / "corpus_full.json"
+        path = HERE / "corpus.json"
         if not path.exists():
             return []
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:
-            print(f"[guidance] could not read corpus_full.json ({type(exc).__name__}); "
-                  f"Q&A will use the curated corpus only.")
+            print(f"[guidance] could not read corpus.json chunks "
+                  f"({type(exc).__name__}); Q&A will use curated entries only.")
             return []
 
+        # Recommendations that already exist as hand-verified entries. 29 of the
+        # 35 curated entries were also ingested as chunks, because ingestion
+        # re-reads the same documents a human read — so the index held two copies
+        # of NG236 1.8.2, and a "top 3" could contain the same recommendation
+        # twice. That is a straightforwardly worse answer: it wastes a slot and
+        # reads as though two guidelines agree when it is one, quoted twice.
+        #
+        # The curated copy wins. It is hand-verified and carries any caveat a
+        # human attached, which the parser cannot know about.
+        curated_keys = {
+            (e.get("source_id"), e.get("section"))
+            for block in self.registry.triggers.values()
+            for e in block.get("entries", [])
+        }
+
         out: list[Passage] = []
+        self.suppressed_duplicates = 0
         for c in data.get("chunks", []):
             src = self.registry.sources.get(c.get("source_id", ""))
             if not src:
                 continue        # never index a chunk we cannot attribute
+            if (c.get("source_id"), c.get("section")) in curated_keys:
+                self.suppressed_duplicates += 1
+                continue
             payload = {
                 "id": c["id"], "section": c["section"], "heading": c.get("heading", ""),
-                "excerpt": c["excerpt"], "caveat": None, "retrieval_weight": 1.0,
-                "url": src.url, "extraction": "automatic",
+                "excerpt": c["excerpt"],
+                # Carried through rather than dropped: for section-precision
+                # sources this is the sentence that stops a reader mistaking a
+                # section number for a recommendation number.
+                "caveat": c.get("caveat"), "retrieval_weight": 1.0,
+                # The chunk's own page where ingestion recorded one, falling back
+                # to the source's landing page. RCP publishes a page per chapter,
+                # so without this every RCP citation would link to the front page
+                # of strokeguideline.org — a citation nobody can follow.
+                "url": c.get("url") or src.url,
+                "extraction": "automatic",
+                "citation_precision": c.get("citation_precision", "recommendation"),
                 "year_tag": c.get("year_tag", ""),
                 "source": _source_ref(src),
             }
@@ -458,6 +584,7 @@ class CorpusRetriever:
             scored.append((adjusted, float(cos), p))
 
         scored.sort(key=lambda t: -t[0])
+        selected = _cap_coarse_citations(scored, top_k)
 
         return [
             {**p.payload, "trigger": p.trigger,
@@ -465,7 +592,7 @@ class CorpusRetriever:
              # Whether the semantic blend contributed. Callers need this to know
              # which scale `cosine` is on, and thus which thresholds apply.
              "blended": semantic is not None}
-            for adj, cos, p in scored[:top_k]
+            for adj, cos, p in selected
         ]
 
     # ------------------------------------------------------------------ answer

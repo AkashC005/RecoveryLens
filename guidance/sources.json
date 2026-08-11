@@ -1,106 +1,100 @@
 {
-  "_note": [
-    "Source registry for the RecoveryLens guidance layer.",
-    "",
-    "Every guidance entry in corpus.json must reference a source_id defined here.",
-    "registry.py enforces this at import time - an entry citing an unknown source",
-    "is a hard failure, not a warning. This is the mechanism that makes it",
-    "structurally impossible to ship uncited clinical text.",
-    "",
-    "PRECEDENCE: 'primary' outranks 'fallback'. Where both an Indian and a UK",
-    "source cover the same trigger, the Indian source is shown first and the UK",
-    "source is labelled as supplementary. This is a deliberate localisation",
-    "decision for an India-based deployment, not an evidence-quality judgement.",
-    "",
-    "COPYRIGHT: NICE content is NICE copyright. Their site terms permit download",
-    "for 'private research, study or in-house use only' and prohibit redistribution",
-    "without permission. We therefore store SHORT attributed excerpts (quotation)",
-    "plus a deep link, never whole sections. registry.py enforces a word cap on",
-    "every excerpt. Before any public deployment, confirm this with NICE - see",
-    "docs/GUIDANCE_LICENSING.md."
-  ],
-
-  "sources": {
-    "isa_2024": {
-      "id": "isa_2024",
-      "tier": "primary",
-      "title": "Recommendations for the Early Management of Acute Ischemic Stroke: A Consensus Statement for Healthcare Professionals from the Indian Stroke Association",
-      "short_title": "ISA Consensus Statement",
-      "publisher": "Indian Stroke Association",
-      "published": "2024-07",
-      "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf",
-      "retrieved": "2026-07-31",
-      "jurisdiction": "IN",
-      "scope_caveat": "Section 2.0 of this document states that rehabilitation is not within its scope, yet Section 12.0 is titled 'Stroke Rehabilitation'. The document is internally inconsistent on this point. Entries drawn from Section 12.0 carry this caveat and are never shown as the sole source for a trigger.",
-      "licence_note": "Published openly by the Indian Stroke Association. Excerpts used with attribution."
-    },
-
-    "nice_ng236": {
-      "id": "nice_ng236",
-      "tier": "fallback",
-      "title": "Stroke rehabilitation in adults",
-      "short_title": "NICE NG236",
-      "publisher": "National Institute for Health and Care Excellence",
-      "published": "2023-10-18",
-      "url": "https://www.nice.org.uk/guidance/ng236",
-      "retrieved": "2026-07-31",
-      "jurisdiction": "UK",
-      "scope_caveat": "Replaces CG162. Covers rehabilitation after stroke in over 16s. Does not cover acute management or secondary prevention pharmacotherapy.",
-      "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
-    },
-
-    "nice_cg76": {
-      "id": "nice_cg76",
-      "tier": "fallback",
-      "title": "Medicines adherence: involving patients in decisions about prescribed medicines and supporting adherence",
-      "short_title": "NICE CG76",
-      "publisher": "National Institute for Health and Care Excellence",
-      "published": "2009-01-28",
-      "url": "https://www.nice.org.uk/guidance/cg76",
-      "retrieved": "2026-07-31",
-      "jurisdiction": "UK",
-      "scope_caveat": "Not stroke-specific - covers medicines adherence in adults generally. Reached via an explicit cross-reference in NG236 section 1.17, which directs readers here for adherence support. Recommendation 1.4.2 has been superseded by NICE NG5.",
-      "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
-    },
-
-    "ncgs_2023": {
-      "id": "ncgs_2023",
-      "tier": "fallback",
-      "title": "National Clinical Guideline for Stroke for the United Kingdom and Ireland",
-      "short_title": "NCGS 2023",
-      "publisher": "Intercollegiate Stroke Working Party / Royal College of Physicians",
-      "published": "2023",
-      "url": "https://www.strokeguideline.org/",
-      "retrieved": "2026-07-31",
-      "jurisdiction": "UK/IE",
-      "scope_caveat": "Added specifically to source follow-up cadence, which NICE NG236 and the ISA statement barely address. Recommendations carry their own year tags ([2016], [2023]) indicating when each was last reviewed; these are preserved in the excerpts. Section numbers here refer to chapters rather than numbered recommendations, because the web edition does not surface recommendation numbers - verify against the PDF before publication.",
-      "licence_note": "Freely accessible at strokeguideline.org. Short attributed excerpts only, with deep link."
-    },
-
-    "nice_ng128": {
-      "id": "nice_ng128",
-      "tier": "fallback",
-      "title": "Stroke and transient ischaemic attack in over 16s: diagnosis and initial management",
-      "short_title": "NICE NG128",
-      "publisher": "National Institute for Health and Care Excellence",
-      "published": "2019-05-01",
-      "updated": "2022-04-13",
-      "url": "https://www.nice.org.uk/guidance/ng128",
-      "retrieved": "2026-07-31",
-      "jurisdiction": "UK",
-      "scope_caveat": "Covers only the acute stage - the 48 hours after symptom onset. Cannot support post-discharge guidance and is used here only where NG236 defers to it.",
-      "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
-    }
+ "_note": [
+  "Source registry for the RecoveryLens guidance layer.",
+  "",
+  "Every guidance entry in corpus.json must reference a source_id defined here.",
+  "registry.py enforces this at import time - an entry citing an unknown source",
+  "is a hard failure, not a warning. This is the mechanism that makes it",
+  "structurally impossible to ship uncited clinical text.",
+  "",
+  "PRECEDENCE: 'primary' outranks 'fallback'. Where both an Indian and a UK",
+  "source cover the same trigger, the Indian source is shown first and the UK",
+  "source is labelled as supplementary. This is a deliberate localisation",
+  "decision for an India-based deployment, not an evidence-quality judgement.",
+  "",
+  "COPYRIGHT: NICE content is NICE copyright. Their site terms permit download",
+  "for 'private research, study or in-house use only' and prohibit redistribution",
+  "without permission. We therefore store SHORT attributed excerpts (quotation)",
+  "plus a deep link, never whole sections. registry.py enforces a word cap on",
+  "every excerpt. Before any public deployment, confirm this with NICE - see",
+  "docs/GUIDANCE_LICENSING.md."
+ ],
+ "sources": {
+  "isa_2024": {
+   "id": "isa_2024",
+   "tier": "primary",
+   "title": "Recommendations for the Early Management of Acute Ischemic Stroke: A Consensus Statement for Healthcare Professionals from the Indian Stroke Association",
+   "short_title": "ISA Consensus Statement",
+   "publisher": "Indian Stroke Association",
+   "published": "2024-07",
+   "url": "https://stroke-india.org/wp-content/uploads/2024/07/stroke.pdf",
+   "retrieved": "2026-07-31",
+   "jurisdiction": "IN",
+   "scope_caveat": "Section 2.0 of this document states that rehabilitation is not within its scope, yet Section 12.0 is titled 'Stroke Rehabilitation'. The document is internally inconsistent on this point. Entries drawn from Section 12.0 carry this caveat and are never shown as the sole source for a trigger.",
+   "licence_note": "Published openly by the Indian Stroke Association. Excerpts used with attribution."
   },
-
-  "rejected_sources": {
-    "_note": "Recorded so the sourcing decision is auditable and we do not re-evaluate these.",
-    "icmr_stw_stroke": {
-      "title": "Standard Treatment Workflow (STW): Image Guided Management of Stroke",
-      "publisher": "Indian Council of Medical Research, Department of Health Research",
-      "url": "https://www.icmr.gov.in/icmrobject/uploads/STWs/1726644021_5_image_guided_management_of_stroke.pdf",
-      "assessed": "2026-07-31",
-      "rejected_because": "Content is confined to acute imaging, thrombolysis windows and thrombectomy technique. Contains no material bearing on any of the nine post-discharge guidance triggers. Retained here only to document that it was assessed."
-    }
+  "nice_ng236": {
+   "id": "nice_ng236",
+   "tier": "fallback",
+   "title": "Stroke rehabilitation in adults",
+   "short_title": "NICE NG236",
+   "publisher": "National Institute for Health and Care Excellence",
+   "published": "2023-10-18",
+   "url": "https://www.nice.org.uk/guidance/ng236",
+   "retrieved": "2026-07-31",
+   "jurisdiction": "UK",
+   "scope_caveat": "Replaces CG162. Covers rehabilitation after stroke in over 16s. Does not cover acute management or secondary prevention pharmacotherapy.",
+   "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
+  },
+  "nice_cg76": {
+   "id": "nice_cg76",
+   "tier": "fallback",
+   "title": "Medicines adherence: involving patients in decisions about prescribed medicines and supporting adherence",
+   "short_title": "NICE CG76",
+   "publisher": "National Institute for Health and Care Excellence",
+   "published": "2009-01-28",
+   "url": "https://www.nice.org.uk/guidance/cg76",
+   "retrieved": "2026-07-31",
+   "jurisdiction": "UK",
+   "scope_caveat": "Not stroke-specific - covers medicines adherence in adults generally. Reached via an explicit cross-reference in NG236 section 1.17, which directs readers here for adherence support. Recommendation 1.4.2 has been superseded by NICE NG5.",
+   "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
+  },
+  "ncgs_2023": {
+   "id": "ncgs_2023",
+   "tier": "fallback",
+   "title": "National Clinical Guideline for Stroke for the United Kingdom and Ireland",
+   "short_title": "NCGS 2023",
+   "publisher": "Intercollegiate Stroke Working Party / Royal College of Physicians",
+   "published": "2023",
+   "url": "https://www.strokeguideline.org/",
+   "retrieved": "2026-07-31",
+   "jurisdiction": "UK/IE",
+   "scope_caveat": "Covers the whole care pathway for the UK and Ireland: acute care, rehabilitation, psychological and communication effects, and long-term secondary prevention. Recommendations are lettered within each numbered section (5.7 A), and each carries its own year tag, so a 2016 recommendation can sit beside a 2023 one in the same section. NICE-accredited.",
+   "licence_note": "Freely accessible at strokeguideline.org and NICE-accredited. Short attributed excerpts with deep links. Auto-extracted recommendations may run to ~250 words because a single lettered recommendation carries its conditions as sub-bullets, and truncating a conditional clinical recommendation would change what it says - see RCP_MAX_WORDS in guidance/ingest.py. Research prototype, not redistribution."
+  },
+  "nice_ng128": {
+   "id": "nice_ng128",
+   "tier": "fallback",
+   "title": "Stroke and transient ischaemic attack in over 16s: diagnosis and initial management",
+   "short_title": "NICE NG128",
+   "publisher": "National Institute for Health and Care Excellence",
+   "published": "2019-05-01",
+   "updated": "2022-04-13",
+   "url": "https://www.nice.org.uk/guidance/ng128",
+   "retrieved": "2026-07-31",
+   "jurisdiction": "UK",
+   "scope_caveat": "Covers only the acute stage - the 48 hours after symptom onset. Cannot support post-discharge guidance and is used here only where NG236 defers to it.",
+   "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
   }
+ },
+ "rejected_sources": {
+  "_note": "Recorded so the sourcing decision is auditable and we do not re-evaluate these.",
+  "icmr_stw_stroke": {
+   "title": "Standard Treatment Workflow (STW): Image Guided Management of Stroke",
+   "publisher": "Indian Council of Medical Research, Department of Health Research",
+   "url": "https://www.icmr.gov.in/icmrobject/uploads/STWs/1726644021_5_image_guided_management_of_stroke.pdf",
+   "assessed": "2026-07-31",
+   "rejected_because": "Content is confined to acute imaging, thrombolysis windows and thrombectomy technique. Contains no material bearing on any of the nine post-discharge guidance triggers. Retained here only to document that it was assessed."
+  }
+ }
 }

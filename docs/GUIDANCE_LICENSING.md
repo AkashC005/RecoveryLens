@@ -32,6 +32,38 @@ Three mitigations, all enforced in code rather than by convention:
 
 This is a good-faith quotation posture. It is not permission.
 
+### The 60-word cap applies to patient-facing entries, not ingested chunks
+
+`MAX_EXCERPT_WORDS = 60` is validated against the hand-verified entries under
+`triggers` in `corpus.json` — the text a carer reads. Auto-extracted chunks in the
+`chunks` block are capped by the parsers instead: 120 words for NICE and ISA,
+**250 for RCP**.
+
+RCP is the exception on purpose. A single lettered RCP recommendation carries its
+own conditions as sub-bullets, and 5.7 A runs to about 200 words including
+*"should not be given if brain imaging has identified significant haemorrhage"*.
+Truncating that to fit a word budget would leave a recommendation that says the
+opposite of what the guideline says in the case that matters most. A longer quote
+is a licensing question; a truncated conditional recommendation is a clinical
+one, and the clinical risk wins.
+
+RCP is freely accessible and NICE-accredited, and `licence_note` in
+`sources.json` records this decision so it is auditable rather than accidental.
+
+### Citation precision is recorded, not assumed
+
+`citation_precision` on every chunk says what its section number points at:
+
+- `recommendation` — the exact recommendation quoted. NICE (1.8.2) and RCP (5.7 A).
+- `section` — the section it sits in, possibly several pages. ISA only, because
+  ISA numbers sections but presents recommendations as unnumbered bullets, so no
+  finer reference exists in the source.
+
+Section-precision chunks carry a caveat saying so in words, and
+`retrieval.py::_cap_coarse_citations` limits them to half of any answer's
+passages. An answer can cite ISA; it cannot be built entirely on citations a
+reader has no precise way to check.
+
 ## What still needs doing
 
 - [ ] **Contact NICE** via <https://www.nice.org.uk/re-using-our-content> and

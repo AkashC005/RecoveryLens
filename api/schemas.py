@@ -359,6 +359,94 @@ class PatientSummary(BaseModel):
     assessment_count: int
     latest_tier_summary: dict[str, str] | None = None
 
+    # Enough state to trage a list without opening every row. A patient with an
+    # open escalation and one with none should not look identical.
+    open_escalations: int = 0
+    next_check_in: datetime | None = None
+    consent_recorded: bool = False
+    opted_out: bool = False
+
+
+# ------------------------------------------------------------- patient detail
+class MessagingState(BaseModel):
+    """Whether this patient's carer can be messaged, and why not if not.
+
+    `can_send` and `blocked_reason` are the return value of
+    `messaging.policy.may_send()` — the same call `POST /api/checkins/{id}/send`
+    makes, not a reimplementation. A screen that derives its own answer will
+    eventually disagree with the gate that actually runs, and the disagreement
+    will surface as "the UI said it would send and nothing arrived".
+    """
+    caregiver_contact_on_file: bool
+    contact_hint: str | None = Field(
+        None,
+        description="Last four digits only. The full number is deliberately not "
+                    "returned to a screen that gets demonstrated and "
+                    "screenshotted; it is in the database and in the send "
+                    "preview, where it is actually needed.")
+    consent_recorded: bool
+    opted_out: bool
+    opted_out_at: datetime | None = None
+    last_inbound_at: datetime | None = None
+    whatsapp_window_open: bool = Field(
+        ..., description="True if the carer messaged us within 24h. Outside the "
+                         "window WhatsApp permits approved templates only, and "
+                         "free-form sends fail with [21654].")
+    whatsapp_window_note: str
+    can_send: bool
+    blocked_reason: str | None = None
+
+
+class AssessmentRecord(BaseModel):
+    """One assessment, as submitted and as scored.
+
+    `inputs` is returned alongside `results` because a risk tier with no visible
+    input is not reviewable — a clinician disagreeing with a tier needs to see
+    what was entered before deciding whether the model or the data is wrong.
+    """
+    id: int
+    created_at: datetime
+    inputs: dict | None = None
+    results: dict | None = None
+    guidance_triggers: list[str] = []
+
+
+CheckInStatus = Literal["completed", "sent", "overdue", "scheduled"]
+
+
+class CheckInRecord(BaseModel):
+    id: int
+    scheduled_for: datetime
+    sent_at: datetime | None = None
+    completed_at: datetime | None = None
+    reason: str | None = None
+    status: CheckInStatus = Field(
+        ..., description="Derived, not stored. 'sent' means sent and awaiting a "
+                         "reply; 'overdue' means the date passed and nothing "
+                         "went out — which is a scheduler or policy problem, not "
+                         "a carer one.")
+    responses: dict | None = None
+    escalated: bool = False
+    escalation_reason: str | None = None
+    urgency: Literal["routine", "soon", "urgent"] = "routine"
+    triage: dict | None = Field(
+        None, description="Full triage record: rule reasons, agent reasons, "
+                          "urgency, agent summary and tool trace.")
+
+
+class PatientDetail(BaseModel):
+    id: int
+    patient_ref: str | None
+    created_at: datetime
+    messaging: MessagingState
+    assessments: list[AssessmentRecord] = Field(
+        ..., description="Newest first.")
+    check_ins: list[CheckInRecord] = Field(
+        ..., description="Chronological, so the follow-up path reads forwards.")
+    latest_tier_summary: dict[str, str] | None = None
+    open_escalations: int = 0
+    next_check_in: datetime | None = None
+
 
 class CheckInResponse(BaseModel):
     id: int

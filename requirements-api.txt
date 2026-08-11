@@ -33,6 +33,13 @@ python-dotenv==1.0.1
 # webhook refuses to accept unsigned requests rather than trusting them.
 twilio==9.3.7
 
+# Text extraction for the one PDF source (the ISA consensus statement) in
+# guidance/ingest.py. Imported inside the function, so a missing install skips
+# that single source and the other four still ingest — ISA is worth less than
+# NICE and RCP here and must not be able to fail the whole run.
+# Not needed at runtime: ingestion is an offline step that produces corpus.json.
+pypdf==6.0.0
+
 # Background sending of scheduled check-ins (messaging/scheduler.py).
 # Only starts when RECOVERYLENS_SCHEDULER=1; a missing install logs and is
 # skipped rather than failing startup.

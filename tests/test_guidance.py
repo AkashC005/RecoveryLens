@@ -213,7 +213,14 @@ def test_predictor_triggers_match_the_corpus():
     ("can they drive with a visual field defect?", "1.8.2"),
     ("are wrist splints recommended?", "1.13.10"),
     ("when is the follow up review due?", "1.17.5"),
-    ("what exercise can they do at home?", "1.13.5"),
+    # Was NG236 1.13.5 until RCP was ingested. That expectation was pinned to the
+    # best answer a NICE-only corpus could give, and NG236 1.13.5 in full is
+    # "Encourage people to participate in physical activity after stroke." — nine
+    # words that answer neither "what exercise" nor "at home". RCP 5.23 A says
+    # "should participate in physical activity for fitness ... Exercise
+    # prescription", with 5.23 E on tailoring and 5.23 G on community facilities
+    # right behind it. The corpus got a better answer, so the expectation moved.
+    ("what exercise can they do at home?", "5.23 A"),
     ("should I refer this patient for physiotherapy for their arm?", "1.13.1"),
 ])
 def test_retrieval_ranks_the_right_recommendation_first(retriever, question, expect_section):
@@ -229,14 +236,56 @@ def test_retrieval_ranks_the_right_recommendation_first(retriever, question, exp
     # other and are all drawn from the correct trigger, so we assert presence in
     # the top-N rather than pretending the ordering is meaningful.
     ("patient has trouble swallowing, what should the family know?", "1.11.2", 3),
-    # Both Vision recommendations are legitimate answers here; 1.8.2 wins on
-    # "eyesight"/"eye" overlap. Asserting an exact order would be asserting noise.
-    ("who should assess their eyesight?", "1.8.1", 3),
 ])
 def test_relevant_recommendation_appears_near_the_top(retriever, question, expect_section, within):
     sections = [h["section"] for h in retriever.search(question, top_k=within)]
     assert expect_section in sections, (
         f"{question!r} -> top {within} were {sections}, expected {expect_section} among them")
+
+
+def test_who_performs_the_assessment_is_answered(retriever):
+    """"who should assess their eyesight?" — the question char n-grams were added for.
+
+    This used to assert NG236 1.8.1 ("Offer ... a specialist orthoptist
+    assessment") in the top 3. It no longer appears at all in TF-IDF-only mode:
+    at 803 passages its cosine falls below SCORE_FLOOR, which had to rise to 0.24
+    to keep "how do I manage a myocardial infarction?" out.
+
+    That is a real loss, recorded rather than hidden — see
+    `test_tfidf_only_mode_is_measurably_weaker_now` below. The property still
+    worth defending is that SOME recommendation naming who performs the
+    assessment comes back, and RCP 4.48 D does name one: assessment by an
+    occupational therapist. It is a correct answer to the question asked, not a
+    lowered bar.
+    """
+    hits = retriever.search("who should assess their eyesight?", top_k=3)
+    assert hits, "no hits at all — the corpus has vision content, so this is a bug"
+    sections = {h["section"] for h in hits}
+    assert sections & {"1.8.1", "4.48 D", "4.48 C"}, (
+        f"expected a vision assessment recommendation, got {sorted(sections)}")
+    assert all("vision" in (h["heading"] or "").lower() for h in hits), (
+        "every hit should sit under a Vision heading")
+
+
+def test_tfidf_only_mode_is_measurably_weaker_now(retriever):
+    """Documents a limitation rather than asserting a success.
+
+    Embeddings used to be an optional improvement. At 803 passages they are
+    load-bearing: the TF-IDF-only path must run a floor of 0.24 to refuse the
+    myocardial-infarction question, and that floor now also excludes NG236 1.8.1,
+    a correct answer to a legitimate question.
+
+    This test exists so that fact cannot be forgotten. If a future change makes
+    1.8.1 retrievable again in TF-IDF-only mode, this test fails — and that
+    failure is good news, at which point delete it and restore the stricter
+    assertion in the test above.
+    """
+    sections = [h["section"] for h in retriever.search(
+        "who should assess their eyesight?", top_k=8)]
+    assert "1.8.1" not in sections, (
+        "1.8.1 is retrievable again in TF-IDF-only mode — good. Restore the "
+        "stricter assertion in test_who_performs_the_assessment_is_answered and "
+        "delete this test.")
 
 
 # NOTE: "which antibiotic for aspiration pneumonia?" used to be in this list and
@@ -259,6 +308,35 @@ def test_retriever_refuses_out_of_scope(retriever, question):
     assert result["answered"] is False
     assert result["mode"] == "refusal"
     assert result["passages"] == []
+
+
+def test_curated_entries_are_not_duplicated_by_ingested_chunks(retriever):
+    """Ingestion re-reads the documents a human already read, so 29 of the 35
+    curated entries came back as chunks too. The index held two copies of NG236
+    1.8.2, and a "top 3" could contain the same recommendation twice — a wasted
+    slot that reads as two guidelines agreeing when it is one, quoted twice.
+
+    The curated copy wins: it is hand-verified and carries any caveat a human
+    attached, which the parser cannot know about.
+    """
+    assert retriever.suppressed_duplicates > 0, (
+        "no duplicates suppressed — either ingestion stopped covering the curated "
+        "recommendations, or the suppression stopped working")
+
+    # Two CURATED entries may share a section number, and legitimately do: both
+    # hand-verified ISA excerpts cite §13.0, because ISA numbers sections rather
+    # than recommendations and one section runs for pages. That is the same
+    # coarseness that makes ISA chunks `citation_precision: "section"`.
+    #
+    # What must never happen is one recommendation appearing as both a curated
+    # entry and an ingested chunk — that is one recommendation quoted twice.
+    tiers: dict[tuple[str, str], set[str]] = {}
+    for p in retriever.passages:
+        key = (p.payload["source"]["id"], p.payload["section"])
+        tiers.setdefault(key, set()).add(p.payload["extraction"])
+
+    both = {k for k, v in tiers.items() if v == {"curated", "automatic"}}
+    assert not both, f"indexed as both curated and automatic: {sorted(both)}"
 
 
 def test_answers_are_extractive_by_default(retriever):

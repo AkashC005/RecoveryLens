@@ -8,10 +8,11 @@ import AssessmentForm from "./components/AssessmentForm";
 import RiskTimeline from "./components/RiskTimeline";
 import CaregiverCheckIn from "./components/CaregiverCheckIn";
 import ClinicianInbox from "./components/ClinicianInbox";
+import PatientDetail from "./components/PatientDetail";
 import type { AssessmentResponse, PatientSummary } from "./lib/api";
 import { api, TIER_STYLES } from "./lib/api";
 
-type View = "assess" | "result" | "patients" | "checkin" | "inbox";
+type View = "assess" | "result" | "patients" | "patient" | "checkin" | "inbox";
 
 function Header({ view, setView, online }: {
   view: View;
@@ -37,7 +38,9 @@ function Header({ view, setView, online }: {
               key={t.id}
               onClick={() => setView(t.id)}
               className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-                view === t.id || (view === "result" && t.id === "assess")
+                view === t.id ||
+                (view === "result" && t.id === "assess") ||
+                (view === "patient" && t.id === "patients")
                   ? "bg-slate text-bone"
                   : "text-muted hover:text-bone"
               }`}
@@ -60,7 +63,7 @@ function Header({ view, setView, online }: {
   );
 }
 
-function PatientList() {
+function PatientList({ onOpen }: { onOpen: (id: number) => void }) {
   const [rows, setRows] = useState<PatientSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,28 +86,59 @@ function PatientList() {
   return (
     <ul className="space-y-3">
       {rows.map((p) => (
-        <li key={p.id} className="card flex flex-wrap items-center gap-4 p-4">
-          <div className="min-w-0 flex-1">
-            <p className="text-base text-bone">
-              {p.patient_ref || <span className="text-muted">Unlabelled</span>}
-            </p>
-            <p className="font-mono text-xs text-muted">
-              #{p.id} · {new Date(p.created_at).toLocaleDateString()}
-            </p>
-          </div>
-          {p.latest_tier_summary && (
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(p.latest_tier_summary).map(([outcome, tier]) => (
-                <span
-                  key={outcome}
-                  title={`${outcome}: ${tier}`}
-                  className={`h-2.5 w-2.5 rounded-full ${
-                    TIER_STYLES[tier as keyof typeof TIER_STYLES]?.dot ?? "bg-muted"
-                  }`}
-                />
-              ))}
+        <li key={p.id}>
+          {/* The whole row is the control. Previously nothing here was
+              clickable, so GET /api/patients/{id} was served and unreachable. */}
+          <button
+            type="button"
+            onClick={() => onOpen(p.id)}
+            className="card flex w-full flex-wrap items-center gap-4 p-4 text-left transition-colors hover:border-teal-dim"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-base text-bone">
+                {p.patient_ref || <span className="text-muted">Unlabelled</span>}
+              </p>
+              <p className="font-mono text-xs text-muted">
+                #{p.id} · {new Date(p.created_at).toLocaleDateString()}
+                {p.next_check_in && (
+                  <> · next {new Date(p.next_check_in).toLocaleDateString()}</>
+                )}
+              </p>
             </div>
-          )}
+
+            {/* Two states that must not look like a healthy row: a carer who
+                opted out, and one whose consent was never recorded. Both mean
+                follow-up has silently stopped. */}
+            {p.opted_out ? (
+              <span className="rounded-full border border-signal/50 px-2 py-0.5 text-[11px] text-signal">
+                Opted out
+              </span>
+            ) : !p.consent_recorded ? (
+              <span className="rounded-full border border-amber/40 px-2 py-0.5 text-[11px] text-amber">
+                No consent
+              </span>
+            ) : null}
+
+            {p.open_escalations > 0 && (
+              <span className="rounded-full border border-signal/50 px-2 py-0.5 text-[11px] text-signal">
+                {p.open_escalations} flagged
+              </span>
+            )}
+
+            {p.latest_tier_summary && (
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(p.latest_tier_summary).map(([outcome, tier]) => (
+                  <span
+                    key={outcome}
+                    title={`${outcome}: ${tier}`}
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      TIER_STYLES[tier as keyof typeof TIER_STYLES]?.dot ?? "bg-muted"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+          </button>
         </li>
       ))}
     </ul>
@@ -114,8 +148,14 @@ function PatientList() {
 export default function App() {
   const [view, setView] = useState<View>("assess");
   const [result, setResult] = useState<AssessmentResponse | null>(null);
+  const [patientId, setPatientId] = useState<number | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const reduce = useReducedMotion();
+
+  const openPatient = (id: number) => {
+    setPatientId(id);
+    setView("patient");
+  };
 
   useEffect(() => {
     api.health().then(() => setOnline(true)).catch(() => setOnline(false));
@@ -166,8 +206,22 @@ export default function App() {
 
           {view === "patients" && (
             <motion.div key="patients" {...fade}>
-              <h2 className="mb-6 text-xl font-semibold text-bone">Patients</h2>
-              <PatientList />
+              <h2 className="text-xl font-semibold text-bone">Patients</h2>
+              <p className="mt-1 mb-6 max-w-prose text-sm text-muted">
+                Everyone assessed so far. Select a row for the full record —
+                risk profile, every check-in and its triage reasoning, and
+                whether follow-up messages are actually reaching the carer.
+              </p>
+              <PatientList onOpen={openPatient} />
+            </motion.div>
+          )}
+
+          {view === "patient" && patientId !== null && (
+            <motion.div key={`patient-${patientId}`} {...fade}>
+              <PatientDetail
+                patientId={patientId}
+                onBack={() => setView("patients")}
+              />
             </motion.div>
           )}
 
@@ -190,7 +244,7 @@ export default function App() {
                 whether the flag came from the rule checks or the triage agent,
                 and what the agent looked at before deciding.
               </p>
-              <ClinicianInbox />
+              <ClinicianInbox onOpenPatient={openPatient} />
             </motion.div>
           )}
         </AnimatePresence>

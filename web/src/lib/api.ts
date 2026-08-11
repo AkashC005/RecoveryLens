@@ -133,9 +133,17 @@ export interface GuidanceBundle {
 }
 
 export interface RetrievedPassage extends GuidanceEntry {
-  trigger: string;
+  /** NULL for auto-ingested chunks, which belong to no topic. This was typed as
+   *  `string` while the backend already returned null, and the mismatch surfaced
+   *  as a 500 on the Ask box rather than as a type error — there is no codegen
+   *  step, so nothing was checking. */
+  trigger: string | null;
   relevance: number;
   cosine: number;
+  /** Whether semantic similarity contributed. Determines which floor applied. */
+  blended: boolean;
+  /** 'curated' = hand-verified section number. 'automatic' = parsed. */
+  extraction: "curated" | "automatic";
 }
 
 export interface GuidanceAnswer {
@@ -198,6 +206,10 @@ export interface GuidanceSelection {
 export interface AssessmentResponse {
   assessment_id: number;
   patient_id: number;
+  /** True if this created a new patient rather than re-assessing one. */
+  patient_created: boolean;
+  /** How many assessments this patient now has. 1 = first. */
+  assessment_number: number;
   created_at: string;
   risks: RiskResult[];
   guidance_triggers: string[];
@@ -224,7 +236,96 @@ export interface PatientSummary {
   created_at: string;
   assessment_count: number;
   latest_tier_summary: Record<string, string> | null;
+  open_escalations: number;
+  next_check_in: string | null;
+  consent_recorded: boolean;
+  opted_out: boolean;
 }
+
+// ------------------------------------------------------------ patient detail
+/** Whether the carer can be messaged. `can_send` and `blocked_reason` come from
+ *  the same `may_send()` call the send endpoint makes — never re-derive them
+ *  here, or this screen will eventually promise a send the gate refuses. */
+export interface MessagingState {
+  caregiver_contact_on_file: boolean;
+  /** Last four digits only, by design. */
+  contact_hint: string | null;
+  consent_recorded: boolean;
+  opted_out: boolean;
+  opted_out_at: string | null;
+  last_inbound_at: string | null;
+  whatsapp_window_open: boolean;
+  whatsapp_window_note: string;
+  can_send: boolean;
+  blocked_reason: string | null;
+}
+
+export interface AssessmentRecord {
+  id: number;
+  created_at: string;
+  /** The request as submitted. Present so a tier can be argued with. */
+  inputs: Partial<AssessmentRequest> | null;
+  results: { risks?: RiskResult[] } | null;
+  guidance_triggers: string[];
+}
+
+/** `overdue` is ours to fix (scheduler off, consent missing, rate limited).
+ *  `sent` is the carer's to answer. Collapsing them hides the actionable one. */
+export type CheckInStatus = "completed" | "sent" | "overdue" | "scheduled";
+
+export interface CheckInRecord {
+  id: number;
+  scheduled_for: string;
+  sent_at: string | null;
+  completed_at: string | null;
+  reason: string | null;
+  status: CheckInStatus;
+  responses: Record<string, unknown> | null;
+  escalated: boolean;
+  escalation_reason: string | null;
+  urgency: Urgency;
+  triage: TriageRecord | null;
+}
+
+export interface PatientDetail {
+  id: number;
+  patient_ref: string | null;
+  created_at: string;
+  messaging: MessagingState;
+  /** Newest first. */
+  assessments: AssessmentRecord[];
+  /** Chronological, so follow-up reads forwards. */
+  check_ins: CheckInRecord[];
+  latest_tier_summary: Record<string, string> | null;
+  open_escalations: number;
+  next_check_in: string | null;
+}
+
+export const CHECKIN_STATUS_META: Record<
+  CheckInStatus,
+  { label: string; className: string; hint: string }
+> = {
+  completed: {
+    label: "Answered",
+    className: "border-teal-dim text-teal",
+    hint: "The carer replied and the response was triaged.",
+  },
+  sent: {
+    label: "Awaiting reply",
+    className: "border-amber/40 text-amber",
+    hint: "Sent to the carer. No response yet.",
+  },
+  overdue: {
+    label: "Not sent",
+    className: "border-signal/50 text-signal",
+    hint: "The date has passed and nothing went out. That is a scheduler or policy problem, not the carer's.",
+  },
+  scheduled: {
+    label: "Scheduled",
+    className: "border-raised text-muted",
+    hint: "Due in the future. Nothing to do yet.",
+  },
+};
 
 // -------------------------------------------------------------------- client
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -255,6 +356,10 @@ export const api = {
     }),
 
   patients: () => request<PatientSummary[]>("/api/patients"),
+
+  /** Full record for one patient: assessments with their inputs, every check-in
+   *  with its triage trace, and whether the carer can be messaged at all. */
+  patient: (id: number) => request<PatientDetail>(`/api/patients/${id}`),
 
   metrics: () => request<Record<string, unknown>>("/api/meta/metrics"),
 

@@ -1,118 +1,28 @@
 /**
  * RecoveryLens — ClinicianInbox
  *
- * Escalations awaiting review, with the reasoning behind each one.
+ * Escalations awaiting review, most urgent first.
  *
- * The design rule here: a clinician must be able to see WHY something was
- * flagged and BY WHAT. Rule-raised reasons and agent-raised reasons are shown
- * separately and labelled, never merged into one sentence. Two reasons:
+ * The reasoning display lives in AgentTrace, shared with the patient record —
+ * see that file for why rule-raised and agent-raised reasons are kept apart.
  *
- *   1. Trust is calibrated per-source. A clinician who learns the agent
- *      over-flags can weight it accordingly — but only if they can tell which
- *      flags came from it.
- *   2. An escalation nobody can audit is one they will eventually ignore, and an
- *      ignored inbox is worse than no inbox.
- *
- * The tool trace is shown too. It is the difference between "the AI flagged
- * this" and "it read the risk profile, checked the last three check-ins, looked
- * up the guidance, and then flagged this" — the second is reviewable.
+ * Each row links through to the full patient record, because an escalation read
+ * without the risk profile and the previous check-ins behind it is a sentence
+ * with no context.
  */
 
 import { useEffect, useState } from "react";
 import { api, URGENCY_STYLES } from "../lib/api";
 import type { AiStatus, Escalation } from "../lib/api";
+import AgentTrace from "./AgentTrace";
 
 const URGENCY_ORDER = { urgent: 0, soon: 1, routine: 2 } as const;
 
-function AgentTrace({ e }: { e: Escalation }) {
-  const [open, setOpen] = useState(false);
-  const t = e.triage;
-  if (!t) return null;
-
-  return (
-    <div className="mt-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="text-xs text-teal"
-      >
-        {open ? "Hide reasoning" : "How this was flagged"}
-      </button>
-
-      {open && (
-        <div className="mt-2 space-y-3 border-l-2 border-raised pl-3">
-          {t.rule_reasons.length > 0 && (
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
-                Raised by rule checks
-              </p>
-              <ul className="mt-1 space-y-0.5">
-                {t.rule_reasons.map((r) => (
-                  <li key={r} className="text-sm text-bone">{r}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {t.agent_reasons.length > 0 && (
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
-                Raised by the triage agent
-              </p>
-              <ul className="mt-1 space-y-0.5">
-                {t.agent_reasons.map((r) => (
-                  <li key={r} className="text-sm text-bone">{r}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {t.agent_summary && (
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
-                Agent notes
-              </p>
-              <p className="mt-1 whitespace-pre-line text-sm text-muted">
-                {t.agent_summary}
-              </p>
-            </div>
-          )}
-
-          {t.tool_calls.length > 0 && (
-            <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
-                What it checked
-              </p>
-              <ul className="mt-1 space-y-0.5">
-                {t.tool_calls.map((c, i) => (
-                  <li key={i} className="font-mono text-xs text-muted">
-                    {c.ok ? "·" : "×"} {c.name}
-                    {c.error && <span className="text-signal"> — {c.error}</span>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {t.mode === "agent_failed" && (
-            <p className="text-xs text-amber/90">
-              The agent could not run ({t.agent_error}). The rule checks above
-              still applied — nothing was missed because of this.
-            </p>
-          )}
-          {t.mode === "rules_only" && (
-            <p className="text-xs text-muted">
-              Agent disabled. Free-text notes were not read.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export default function ClinicianInbox() {
+export default function ClinicianInbox({
+  onOpenPatient,
+}: {
+  onOpenPatient?: (id: number) => void;
+}) {
   const [rows, setRows] = useState<Escalation[] | null>(null);
   const [status, setStatus] = useState<AiStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,9 +77,19 @@ export default function ClinicianInbox() {
                   <span className={`rounded-full border px-2 py-0.5 text-xs ${u.className}`}>
                     {u.label}
                   </span>
-                  <span className="text-sm text-bone">
-                    {e.patient_ref || `Patient #${e.patient_id}`}
-                  </span>
+                  {onOpenPatient ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenPatient(e.patient_id)}
+                      className="text-sm text-bone underline decoration-raised underline-offset-4 hover:decoration-teal"
+                    >
+                      {e.patient_ref || `Patient #${e.patient_id}`}
+                    </button>
+                  ) : (
+                    <span className="text-sm text-bone">
+                      {e.patient_ref || `Patient #${e.patient_id}`}
+                    </span>
+                  )}
                   <span className="ml-auto font-mono text-xs text-muted">
                     {new Date(e.completed_at).toLocaleString()}
                   </span>
@@ -183,7 +103,7 @@ export default function ClinicianInbox() {
                   </blockquote>
                 )}
 
-                <AgentTrace e={e} />
+                <AgentTrace triage={e.triage} />
               </li>
             );
           })}

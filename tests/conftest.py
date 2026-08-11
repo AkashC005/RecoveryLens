@@ -21,8 +21,37 @@ which is exactly how test_triage.py and test_selector.py already do it.
 """
 
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# The database is OVERRIDDEN, not cleared.
+#
+# DATABASE_URL used to sit in ISOLATED_VARS below, which was worse than leaving
+# it alone. `api/database.py` reads it as:
+#
+#     os.getenv("DATABASE_URL", "sqlite:///./recoverylens.db")
+#
+# so an ABSENT variable falls through to that default — the developer's real
+# database, in the repository root. The autouse fixture deletes the variable
+# before each test body runs, so any test that imported the API would have read
+# and written the live demo data, and a test that creates a patient would leave
+# it there. Clearing a variable is only safe when absence means "off"; here
+# absence means "use production".
+#
+# Setting it to "" is not the fix either: SQLAlchemy cannot parse an empty URL
+# and create_engine raises at import.
+#
+# So it gets a real, throwaway file. File-based rather than :memory: because
+# SessionLocal opens more than one connection and each would otherwise get its
+# own empty database.
+_TEST_DB = Path(tempfile.gettempdir()) / "recoverylens-tests.db"
+
+OVERRIDDEN_VARS = {
+    "DATABASE_URL": f"sqlite:///{_TEST_DB}",
+}
 
 # Cleared for every test. Feature flags first, then credentials — a test that
 # gets past a flag check must still not be able to reach a provider.
@@ -49,9 +78,8 @@ ISOLATED_VARS = [
     "RECOVERYLENS_STT_MODEL",
     "RECOVERYLENS_TTS_MODEL",
     "RECOVERYLENS_TTS_VOICE",
-    # never point a test at a real database
-    "DATABASE_URL",
 ]
+# NOTE: DATABASE_URL is deliberately NOT in this list. See OVERRIDDEN_VARS.
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +91,8 @@ def isolate_environment(monkeypatch):
     """
     for var in ISOLATED_VARS:
         monkeypatch.delenv(var, raising=False)
+    for var, value in OVERRIDDEN_VARS.items():
+        monkeypatch.setenv(var, value)
 
 
 def pytest_configure(config):
@@ -84,5 +114,13 @@ def pytest_configure(config):
     # the codebase treats "" as off.
     for var in ISOLATED_VARS:
         os.environ[var] = ""
+
+    # Before collection too, because api/database.py builds its engine at import
+    # time and collection imports it. Started fresh each session so one run
+    # cannot leave rows behind that another run depends on.
+    os.environ.update(OVERRIDDEN_VARS)
+    _TEST_DB.unlink(missing_ok=True)
+
     print("\n[tests] environment neutralised before collection — the suite runs "
-          "against the deterministic defaults, not your .env.")
+          f"against the deterministic defaults, not your .env.\n"
+          f"[tests] database: {_TEST_DB}")

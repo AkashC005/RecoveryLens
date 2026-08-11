@@ -11,7 +11,7 @@ Interactive docs at http://localhost:8000/docs — that page alone is a
 demonstrable artifact before any frontend exists.
 """
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 import os
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -30,9 +30,11 @@ from .webhooks import router as messaging_router
 from .database import (Assessment, CheckIn, Patient, SessionLocal, get_db,
                        init_db, utcnow)
 from .predictor import predictor
-from .schemas import (AssessmentRequest, AssessmentResponse, CheckInResponse,
-                      CheckInSubmission, GuidanceAnswer, GuidanceBlock,
-                      GuidanceBundle, GuidanceQuestion, PatientSummary)
+from .schemas import (AssessmentRecord, AssessmentRequest, AssessmentResponse,
+                      CheckInRecord, CheckInResponse, CheckInSubmission,
+                      GuidanceAnswer, GuidanceBlock, GuidanceBundle,
+                      GuidanceQuestion, MessagingState, PatientDetail,
+                      PatientSummary)
 
 app = FastAPI(
     title="RecoveryLens API",
@@ -309,41 +311,166 @@ def list_patients(db: Session = Depends(get_db), limit: int = 100):
     patients = (db.query(Patient)
                   .order_by(Patient.created_at.desc())
                   .limit(limit).all())
+    now = utcnow()
     out = []
     for p in patients:
         latest = (sorted(p.assessments, key=lambda a: a.created_at)[-1]
                   if p.assessments else None)
         summary = None
-        if latest and latest.results:
+        if latest and latest.results and latest.results.get("risks"):
             summary = {r["outcome"]: r["tier"] for r in latest.results["risks"]}
+
+        upcoming = [_aware(c.scheduled_for) for c in p.check_ins
+                    if c.completed_at is None and _aware(c.scheduled_for)
+                    and _aware(c.scheduled_for) >= now]
+
         out.append(PatientSummary(
             id=p.id, patient_ref=p.patient_ref, created_at=p.created_at,
             assessment_count=len(p.assessments), latest_tier_summary=summary,
+            open_escalations=sum(1 for c in p.check_ins if c.escalated),
+            next_check_in=min(upcoming) if upcoming else None,
+            consent_recorded=bool(p.consent_recorded),
+            opted_out=bool(p.opted_out),
         ))
     return out
 
 
-@app.get("/api/patients/{patient_id}", tags=["patients"])
+WHATSAPP_WINDOW = timedelta(hours=24)
+
+
+def _aware(dt):
+    """SQLite hands back naive datetimes. Everything written here is UTC."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _checkin_status(c: CheckIn, now) -> str:
+    """Derived, never stored — storing it would mean keeping it in sync.
+
+    The distinction that matters is `overdue` vs `sent`: a check-in whose date
+    has passed with nothing sent is OUR failure (scheduler off, consent missing,
+    rate limited), not a carer who has not replied. Collapsing the two hides the
+    only one we can act on.
+    """
+    if c.completed_at is not None:
+        return "completed"
+    if c.sent_at is not None:
+        return "sent"
+    if _aware(c.scheduled_for) is not None and _aware(c.scheduled_for) < now:
+        return "overdue"
+    return "scheduled"
+
+
+def _messaging_state(p: Patient, db: Session, now) -> MessagingState:
+    """Whether this carer can be messaged — decided by the real policy gate.
+
+    `may_send()` is called with exactly the arguments the send endpoint uses, so
+    this screen cannot claim a send will succeed when the gate would refuse it.
+    """
+    from messaging import may_send
+
+    last_sent = (db.query(CheckIn)
+                 .filter(CheckIn.patient_id == p.id, CheckIn.sent_at.isnot(None))
+                 .order_by(CheckIn.sent_at.desc()).first())
+
+    decision = may_send(
+        consent_recorded=bool(p.consent_recorded),
+        contact=p.caregiver_contact,
+        opted_out=bool(p.opted_out),
+        last_sent_at=last_sent.sent_at if last_sent else None,
+        now=now,
+    )
+
+    contact = (p.caregiver_contact or "").strip()
+    inbound = _aware(p.last_inbound_at)
+    window_open = inbound is not None and (now - inbound) < WHATSAPP_WINDOW
+
+    if inbound is None:
+        note = ("This carer has never messaged us, so no free-form window has "
+                "ever opened. On WhatsApp the first contact must be an "
+                "approved template.")
+    elif window_open:
+        left = WHATSAPP_WINDOW - (now - inbound)
+        note = (f"Open for another {int(left.total_seconds() // 3600)}h "
+                f"{int(left.total_seconds() % 3600 // 60)}m. Free-form messages "
+                f"are permitted until it closes.")
+    else:
+        note = ("Closed — the carer's last message was over 24 hours ago. "
+                "Free-form sends will fail with [21654]; a template is required.")
+
+    return MessagingState(
+        caregiver_contact_on_file=bool(contact),
+        # Last four only. This screen is the one that gets demonstrated on a
+        # projector; the full number lives in the database and in the send
+        # preview, which is where it is actually needed.
+        contact_hint=f"…{contact[-4:]}" if len(contact) >= 4 else None,
+        consent_recorded=bool(p.consent_recorded),
+        opted_out=bool(p.opted_out),
+        opted_out_at=p.opted_out_at,
+        last_inbound_at=p.last_inbound_at,
+        whatsapp_window_open=window_open,
+        whatsapp_window_note=note,
+        can_send=bool(decision),
+        blocked_reason=decision.reason or None,
+    )
+
+
+@app.get("/api/patients/{patient_id}", response_model=PatientDetail,
+         tags=["patients"])
 def get_patient(patient_id: int, db: Session = Depends(get_db)):
+    """Everything recorded about one patient.
+
+    This endpoint existed before and returned an unvalidated dict that no
+    frontend called. It now returns a declared shape and adds the three things
+    that were missing and mattered: the assessment INPUTS (a tier is not
+    reviewable without them), the full triage record per check-in (rule reasons
+    vs agent reasons vs tool trace), and the messaging state — which is the only
+    place a clinician can see that follow-up has silently stopped because
+    consent was never recorded or the carer opted out.
+    """
     p = db.query(Patient).filter(Patient.id == patient_id).first()
     if not p:
         raise HTTPException(404, "Patient not found")
-    return {
-        "id": p.id,
-        "patient_ref": p.patient_ref,
-        "created_at": p.created_at,
-        "assessments": [
-            {"id": a.id, "created_at": a.created_at, "results": a.results,
-             "guidance_triggers": a.guidance_triggers}
-            for a in sorted(p.assessments, key=lambda a: a.created_at, reverse=True)
+
+    now = utcnow()
+    check_ins = sorted(p.check_ins, key=lambda c: c.scheduled_for or now)
+    assessments = sorted(p.assessments, key=lambda a: a.created_at, reverse=True)
+
+    latest = assessments[0] if assessments else None
+    tiers = None
+    if latest and latest.results and latest.results.get("risks"):
+        tiers = {r["outcome"]: r["tier"] for r in latest.results["risks"]}
+
+    upcoming = [_aware(c.scheduled_for) for c in check_ins
+                if c.completed_at is None and _aware(c.scheduled_for)
+                and _aware(c.scheduled_for) >= now]
+
+    return PatientDetail(
+        id=p.id,
+        patient_ref=p.patient_ref,
+        created_at=p.created_at,
+        messaging=_messaging_state(p, db, now),
+        assessments=[
+            AssessmentRecord(
+                id=a.id, created_at=a.created_at, inputs=a.inputs,
+                results=a.results, guidance_triggers=a.guidance_triggers or [])
+            for a in assessments
         ],
-        "check_ins": [
-            {"id": c.id, "scheduled_for": c.scheduled_for,
-             "completed_at": c.completed_at, "reason": c.reason,
-             "escalated": c.escalated, "escalation_reason": c.escalation_reason}
-            for c in sorted(p.check_ins, key=lambda c: c.scheduled_for)
+        check_ins=[
+            CheckInRecord(
+                id=c.id, scheduled_for=c.scheduled_for, sent_at=c.sent_at,
+                completed_at=c.completed_at, reason=c.reason,
+                status=_checkin_status(c, now), responses=c.responses,
+                escalated=bool(c.escalated),
+                escalation_reason=c.escalation_reason,
+                urgency=c.urgency or "routine", triage=c.triage)
+            for c in check_ins
         ],
-    }
+        latest_tier_summary=tiers,
+        open_escalations=sum(1 for c in check_ins if c.escalated),
+        next_check_in=min(upcoming) if upcoming else None,
+    )
 
 
 @app.delete("/api/patients/{patient_id}", tags=["patients"])

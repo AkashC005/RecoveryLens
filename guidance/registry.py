@@ -147,6 +147,27 @@ class Registry:
                         f"{name}/{e.get('id', '?')}: excerpt is {words} words, cap is "
                         f"{MAX_EXCERPT_WORDS} (copyright guard)")
 
+                # THE SAFETY LINE. corpus.json now holds both hand-verified
+                # entries and auto-extracted chunks, and this is where the
+                # separation is enforced rather than assumed. Anything under
+                # `triggers` is reachable by the patient-facing cards, so an
+                # auto-extracted chunk appearing here — by a bad merge, a
+                # copy-paste, or a future script writing to the wrong key —
+                # would put a regex-parsed section number in front of a carer.
+                if e.get("extraction", "curated") != "curated":
+                    problems.append(
+                        f"{name}/{e.get('id', '?')}: extraction is "
+                        f"{e.get('extraction')!r}. Entries under `triggers` are "
+                        f"patient-facing and must be hand-verified. "
+                        f"Auto-extracted material belongs in the `chunks` block.")
+                if e.get("citation_precision", "recommendation") != "recommendation":
+                    problems.append(
+                        f"{name}/{e.get('id', '?')}: citation_precision is "
+                        f"{e.get('citation_precision')!r}. That marking is applied "
+                        f"by the ingestion parsers to auto-extracted chunks, so "
+                        f"seeing it here means chunk material reached a "
+                        f"patient-facing block.")
+
         if problems:
             raise GuidanceError(
                 "Guidance corpus failed validation:\n  - " + "\n  - ".join(problems))
