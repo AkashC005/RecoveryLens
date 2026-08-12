@@ -39,11 +39,14 @@ from messaging import (
     is_stop_request, may_send, parse_reply,
 )
 from triage import agent_enabled
-from voice import ConfirmationState, compose_discarded, is_confirmation
+from voice import (ConfirmationState, Transcript, compose_discarded,
+                   is_confirmation)
 
 from .triage_tools import DatabaseToolBox
 
-from .database import CheckIn, Patient, get_db, utcnow
+from .auth import (caregiver_or_clinician_checkin, current_user,
+                   scoped_checkin)
+from .database import CheckIn, Patient, User, get_db, utcnow
 
 router = APIRouter(tags=["messaging"])
 
@@ -300,7 +303,8 @@ def _run_triage_agent(checkin_id: int, free_text: str,
 
 
 @router.post("/api/checkins/{checkin_id}/send", tags=["messaging"])
-def send_checkin(checkin_id: int, db: Session = Depends(get_db)):
+def send_checkin(checkin_id: int, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
     """Send one check-in to the carer.
 
     Every policy check runs here — opt-out, consent, a usable number, rate
@@ -310,9 +314,7 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db)):
     """
     from messaging import build_sender
 
-    c = db.query(CheckIn).filter(CheckIn.id == checkin_id).first()
-    if not c:
-        raise HTTPException(404, "Check-in not found")
+    c = scoped_checkin(checkin_id, user, db)
     patient = c.patient
     if not patient:
         raise HTTPException(404, "Check-in has no patient")
@@ -331,48 +333,76 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db)):
     if not decision:
         return {"sent": False, "reason": decision.reason, "check_in_id": c.id}
 
-    body = compose_checkin(
+    body, translation = compose_checkin(
         day=_day_of(c), label=c.reason or "Check-in",
-        caregiver_message=_caregiver_text(c), patient_ref=patient.patient_ref)
+        caregiver_message=_caregiver_text(c), patient_ref=patient.patient_ref,
+        language=patient.language or "en")
 
-    result = build_sender().send(patient.caregiver_contact, body)
+    # Audio companion. Generated AFTER translation so the carer hears their own
+    # language, and treated as an enhancement throughout: every failure path here
+    # returns None with a stated reason and the text still goes out. A check-in
+    # that reaches a family silently is a success; one that does not reach them
+    # because the tunnel was misconfigured is not.
+    from .media import synthesise_for
+
+    media_url, audio = synthesise_for(
+        db, c, body, language=translation.get("language", "en"))
+
+    result = build_sender().send(patient.caregiver_contact, body,
+                                 media_url=media_url)
     if result.ok:
         c.sent_at = utcnow()
+        # Recorded on the check-in, not just returned, so the clinician record
+        # shows what language went out and why. "Patient's language is Tamil but
+        # the message went in English" is a fact someone needs to be able to
+        # discover without re-running the send.
+        state = dict(c.triage or {})
+        state["outbound_language"] = translation
+        state["outbound_audio"] = audio
+        c.triage = state
         db.commit()
 
     return {
         "sent": result.ok, "channel": result.channel,
         "message_id": result.message_id, "error": result.error,
-        "check_in_id": c.id, "preview": body,
+        "check_in_id": c.id, "preview": body, "translation": translation,
+        # Reported separately from `sent` so "delivered as text only" is visible
+        # rather than being inferred from the absence of a field.
+        "audio": audio, "media_url": result.media_url,
     }
 
 
-def _handle_voice_note(db: Session, checkin: CheckIn, media_url: str,
-                       mime_type: str) -> str:
-    """Transcribe a voice note and ask the carer to confirm it.
+def record_voice_note(checkin: CheckIn, audio: bytes, mime_type: str,
+                      audio_ref: str) -> tuple[str, Transcript | None]:
+    """Transcribe audio and park it for confirmation. THE shared voice core.
+
+    Called by both the Twilio webhook and the browser endpoint. It exists as one
+    function on purpose: every safety property of the voice path lives here — the
+    confidence gate, negation-loss warnings, and the rule that nothing is recorded
+    against the check-in until a human confirms the read-back. A second
+    implementation for the browser would be a second place for those to be wrong,
+    and the browser is the path that gets demonstrated.
 
     Deliberately does NOT submit the check-in. The transcript is parked in
-    `triage["pending_voice"]` until confirmed. If the carer never confirms, the
-    sweep in `escalate_unconfirmed_voice()` flags it for a clinician rather than
-    letting it disappear — we know a message exists, we just cannot read it.
+    `triage["pending_voice"]`. If it is never confirmed — the carer ignores the
+    WhatsApp read-back, or closes the browser tab — `escalate_unconfirmed_voice()`
+    flags it for a clinician rather than letting it disappear. We know a message
+    exists about a stroke patient; we just cannot verify what it said.
+
+    Returns (message for the carer, transcript or None if unusable).
     """
     from voice import (ConfirmationState, build_speech_provider,
                        compose_readback, compose_unusable)
-
-    audio = _download_media(media_url)
-    if audio is None:
-        return compose_unusable()
 
     transcript = build_speech_provider().transcribe(audio, mime_type)
     if not transcript.usable:
         # Low confidence or a provider failure. We do not guess at clinical
         # meaning; we ask again, and offer typing as a way out.
         state = dict(checkin.triage or {})
-        attempts = state.get("voice_attempts", 0) + 1
-        state["voice_attempts"] = attempts
+        state["voice_attempts"] = state.get("voice_attempts", 0) + 1
         state["last_voice_error"] = transcript.error or "confidence below threshold"
         checkin.triage = state
-        return compose_unusable()
+        return compose_unusable(), None
 
     pending = ConfirmationState(
         transcript=transcript.text,
@@ -382,13 +412,148 @@ def _handle_voice_note(db: Session, checkin: CheckIn, media_url: str,
         warnings=transcript.warnings,
         # The recording itself is kept, not just the text: a clinician reviewing
         # an escalation must be able to hear what was actually said.
-        audio_ref=media_url,
+        audio_ref=audio_ref,
     )
     state = dict(checkin.triage or {})
     state["pending_voice"] = pending.to_json()
     checkin.triage = state
 
-    return compose_readback(transcript)
+    return compose_readback(transcript), transcript
+
+
+def _handle_voice_note(db: Session, checkin: CheckIn, media_url: str,
+                       mime_type: str) -> str:
+    """Twilio's entry point: fetch the media, then run the shared core."""
+    from voice import compose_unusable
+
+    audio = _download_media(media_url)
+    if audio is None:
+        return compose_unusable()
+
+    message, _ = record_voice_note(checkin, audio, mime_type, audio_ref=media_url)
+    return message
+
+
+# --------------------------------------------------------------- browser voice
+# These two endpoints live here, beside the Twilio handler, because they call the
+# same `record_voice_note`. Putting them in their own module would make it easy to
+# "fix" one path without the other, and the failure that matters — a transcript
+# treated as confirmed when it was not — would show up on whichever path nobody
+# was looking at.
+#
+# The real input path is a carer sending a WhatsApp voice note, not someone at a
+# laptop. The browser path exists because the feature was otherwise invisible: it
+# had no UI at all, so it could not be demonstrated or even tried. It is not a
+# separate implementation, and if it ever becomes one, delete it.
+
+# Audio is accepted as a raw request body rather than multipart. `UploadFile`
+# requires python-multipart, which this app deliberately does not install — see
+# `_parse_form` above, where the same constraint shaped the Twilio handler.
+MAX_AUDIO_BYTES = 8 * 1024 * 1024      # ~8 minutes of opus; far more than needed
+
+
+@router.post("/api/checkins/{checkin_id}/voice", tags=["voice"])
+async def submit_voice_note(checkin_id: int, request: Request,
+                           db: Session = Depends(get_db)):
+    # Carer token or clinician session — the same rule as /respond. Recording a
+    # voice note is answering a check-in, so it cannot be easier to reach than
+    # typing one.
+
+    """Accept a recording from the browser and return the read-back to confirm.
+
+    Returns `confirmed: false` in every success case. The transcript is parked,
+    not recorded. The caller gets the text to display and must call the confirm
+    endpoint before it can become part of the check-in.
+    """
+    from voice import voice_enabled
+
+    checkin = caregiver_or_clinician_checkin(checkin_id, request, db)
+    if checkin.completed_at is not None:
+        raise HTTPException(409, "This check-in has already been answered.")
+
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(400, "Empty request body — no audio received.")
+    if len(audio) > MAX_AUDIO_BYTES:
+        raise HTTPException(413, f"Recording is larger than "
+                                 f"{MAX_AUDIO_BYTES // (1024 * 1024)}MB.")
+
+    mime_type = (request.headers.get("content-type") or "audio/webm").split(";")[0]
+
+    message, transcript = record_voice_note(
+        checkin, audio, mime_type,
+        # No audio hosting yet, so there is no URL to store. Named rather than
+        # left blank: a clinician reviewing an unconfirmed browser transcript
+        # needs to know the recording is gone, not wonder where the link is.
+        audio_ref="browser-upload (recording not retained)")
+    db.commit()
+
+    return {
+        "check_in_id": checkin.id,
+        # False in every success case. Saying so in the payload rather than
+        # leaving the client to infer it from the absence of a field.
+        "confirmed": False,
+        "usable": transcript is not None,
+        "readback": message,
+        "transcript": transcript.text if transcript else "",
+        "confidence": round(transcript.confidence, 3) if transcript else 0.0,
+        "provider": transcript.provider if transcript else "",
+        # Phrases where speech recognition characteristically drops a negation —
+        # "he can't move his arm" becoming "he can move his arm", which reads as
+        # reassuring. Surfaced so the UI can point at them during the read-back.
+        "warnings": transcript.warnings if transcript else [],
+        "voice_configured": voice_enabled(),
+    }
+
+
+@router.post("/api/checkins/{checkin_id}/voice/confirm", tags=["voice"])
+async def confirm_voice_note(checkin_id: int, request: Request,
+                             db: Session = Depends(get_db)):
+    """Confirm or reject a parked transcript. Body: {"confirmed": true|false}.
+
+    On confirmation the text is returned for the carer to submit with the rest of
+    the form; it is NOT written to `responses` here. The check-in is still
+    answered by one path — `POST /api/checkins/{id}/respond` — so the triage agent
+    reads voice and typed text identically and there is no second way to complete
+    a check-in.
+    """
+    import json
+
+    from voice import ConfirmationState, compose_discarded
+
+    checkin = caregiver_or_clinician_checkin(checkin_id, request, db)
+
+    state = dict(checkin.triage or {})
+    pending = ConfirmationState.from_json(state.get("pending_voice"))
+    if pending is None:
+        raise HTTPException(409, "No transcript is awaiting confirmation.")
+
+    try:
+        confirmed = bool(json.loads(await request.body() or b"{}").get("confirmed"))
+    except Exception:
+        raise HTTPException(400, "Body must be JSON: {\"confirmed\": true|false}")
+
+    # The same six-hour window the WhatsApp path uses. An expired read-back is not
+    # silently accepted just because the browser is still open.
+    if pending.expired():
+        _clear_pending(checkin)
+        db.commit()
+        raise HTTPException(
+            409, "That read-back expired. Please record again.")
+
+    _clear_pending(checkin)
+    db.commit()
+
+    if not confirmed:
+        return {"check_in_id": checkin.id, "confirmed": False,
+                "transcript": "", "message": compose_discarded()}
+
+    return {
+        "check_in_id": checkin.id,
+        "confirmed": True,
+        "transcript": pending.transcript,
+        "message": "Thanks — that has been added to your answers.",
+    }
 
 
 def _download_media(url: str) -> bytes | None:

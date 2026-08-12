@@ -61,6 +61,7 @@ const EMPTY: AssessmentRequest = {
   planned_aspirin: false,
   planned_heparin: "none",
   caregiver_contact: "",
+  caregiver_language: "en",
 };
 
 function Section({ title, help, children }: {
@@ -119,6 +120,7 @@ export default function AssessmentForm({
         ...form,
         patient_ref: form.patient_ref || null,
         caregiver_contact: form.caregiver_contact || null,
+        caregiver_language: form.caregiver_language || "en",
       };
       onResult(await api.assess(payload));
     } catch (err) {
@@ -294,6 +296,27 @@ export default function AssessmentForm({
           />
           <p className="mt-1 text-xs text-muted">
             Only with consent. Used for scheduled check-ins.
+          </p>
+        </div>
+        <div>
+          <label className="field-label" htmlFor="lang">Carer&rsquo;s language</label>
+          <select
+            id="lang" className="field-input"
+            value={form.caregiver_language ?? "en"}
+            onChange={(e) => set("caregiver_language",
+                                 e.target.value as "en" | "ta" | "hi")}
+          >
+            <option value="en">English</option>
+            <option value="ta">Tamil — தமிழ்</option>
+            <option value="hi">Hindi — हिन्दी</option>
+          </select>
+          {/* Said here rather than buried in docs, because a clinician choosing
+              Tamil should know what will and will not be translated before they
+              rely on it. */}
+          <p className="mt-1 text-xs text-muted">
+            Applies to messages sent to the carer. Guideline quotations and
+            everything on this side of the app stay in English — a translated
+            recommendation is no longer a quotation.
           </p>
         </div>
       </Section>

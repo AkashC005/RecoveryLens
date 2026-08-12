@@ -115,6 +115,35 @@ def test_rcp_keeps_conditions_attached_to_their_recommendation(rcp):
     assert len(a.text.split()) <= RCP_MAX_WORDS
 
 
+def test_rcp_stops_at_the_apparatus_block(rcp):
+    """Every RCP section ends with "Sources, evidence to recommendations,
+    implications" — provenance notes and cross-reference lists.
+
+    Without a boundary the LAST lettered recommendation of each section absorbed
+    it: 94 of 512 chunks (18%) were contaminated on the first real ingestion, and
+    some contained nothing but links to other sections. One of those would have
+    been quoted verbatim to a clinician under a genuine recommendation number.
+    """
+    for c in rcp:
+        assert "evidence to recommendations" not in c.text.lower(), c.section
+        assert "Follows from the evidence" not in c.text, c.section
+        assert not c.text.strip().endswith("Sources"), c.section
+
+    by_section = {c.section: c for c in rcp}
+    assert by_section["2.5 N"].text.endswith("support."), \
+        "the recommendation should end where the recommendation ends"
+
+
+def test_rcp_drops_cross_reference_lists(rcp):
+    """"( Section 3.4 Diagnosis ... , Section 3.5 Management ... )" is navigation,
+    whatever section number it inherited. 2.3 F in the fixture is followed by one,
+    and the recommendation must survive without it."""
+    f = next(c for c in rcp if c.section == "2.3 F")
+    assert "hyperacute stroke unit" in f.text
+    assert "Section 3.4" not in f.text
+    assert not any(c.text.count("Section 3.") >= 2 for c in rcp)
+
+
 def test_rcp_captures_year_tags(rcp):
     by_section = {c.section: c for c in rcp}
     assert by_section["5.7 A"].year_tag == "2023"

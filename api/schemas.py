@@ -103,6 +103,12 @@ class AssessmentRequest(BaseModel):
     # caregiver contact, for the follow-up system
     caregiver_contact: str | None = Field(
         None, description="Phone or email for check-ins. Requires consent.")
+    caregiver_language: Literal["en", "ta", "hi"] | None = Field(
+        None,
+        description="Language for messages sent to the CARER. Clinician-facing "
+                    "text and every quoted guideline excerpt stay English "
+                    "regardless — a translated NICE recommendation is no longer a "
+                    "quotation. Defaults to English.")
 
     model_config = {
         "json_schema_extra": {

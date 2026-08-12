@@ -44,6 +44,9 @@ export interface AssessmentRequest {
   planned_aspirin: boolean;
   planned_heparin: HeparinPlan;
   caregiver_contact?: string | null;
+  /** Language for messages sent to the CARER. Clinician-facing text and quoted
+   *  guideline excerpts stay English regardless. */
+  caregiver_language?: "en" | "ta" | "hi" | null;
 }
 
 // ------------------------------------------------------------------ response
@@ -328,11 +331,41 @@ export const CHECKIN_STATUS_META: Record<
 };
 
 // -------------------------------------------------------------------- client
+/** Thrown on 401 so the shell can show the sign-in screen instead of an error.
+ *  A session expiring mid-session is normal, not a failure. */
+export class NotSignedIn extends Error {}
+
+/** Set when the page was opened from a carer's link (`/checkin?token=...`).
+ *
+ *  Carers do not have accounts. Their token is sent as a header on the three
+ *  endpoints that accept it, and it grants access to exactly one check-in. */
+let checkInToken: string | null = null;
+
+export function setCheckInToken(token: string | null) {
+  checkInToken = token;
+}
+
+export function getCheckInToken() {
+  return checkInToken;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  if (checkInToken) headers["X-CheckIn-Token"] = checkInToken;
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers,
+    // The session is an httpOnly cookie, so JavaScript never holds the token and
+    // an XSS bug cannot exfiltrate it. That only works if the cookie is actually
+    // sent, which cross-origin fetch does not do by default.
+    credentials: "include",
   });
+
+  if (res.status === 401) throw new NotSignedIn("Not signed in");
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -346,8 +379,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ----------------------------------------------------------------------- auth
+export interface AuthStatus {
+  /** True only while no account exists. The server tells us nothing else before
+   *  sign-in — no user count, no email, no organisation name. */
+  bootstrap_available: boolean;
+}
+
+export interface Me {
+  id: number;
+  email: string;
+  full_name: string;
+  organisation_id: number;
+  organisation: string;
+}
+
 export const api = {
   health: () => request<{ status: string; models_loaded: number }>("/health"),
+
+  authStatus: () => request<AuthStatus>("/api/auth/status"),
+  me: () => request<Me>("/api/auth/me"),
+
+  login: (email: string, password: string) =>
+    request<Me>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+
+  /** Only works while no account exists. Creates the first clinician and their
+   *  organisation, and adopts any patients that predate authentication. */
+  bootstrap: (email: string, password: string, organisation: string) =>
+    request<{ adopted_existing_patients: number }>("/api/auth/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({ email, password, organisation }),
+    }),
+
+  logout: () => request<{ signed_out: boolean }>("/api/auth/logout", {
+    method: "POST",
+  }),
+
+  /** The carer's link for one check-in. Clinician-only to issue. */
+  checkInLink: (checkinId: number) =>
+    request<{ check_in_id: number; token: string; path: string }>(
+      `/api/checkins/${checkinId}/link`),
+
+  /** The single check-in a carer's token refers to. No session needed. */
+  checkInByToken: (token: string) =>
+    request<DueCheckIn>(`/api/checkins/by-token?token=${encodeURIComponent(token)}`),
 
   assess: (payload: AssessmentRequest) =>
     request<AssessmentResponse>("/api/assess", {
@@ -388,6 +466,23 @@ export const api = {
     }),
 
   escalations: () => request<Escalation[]>("/api/escalations"),
+
+  /** Upload a recording. Sent as a raw body rather than multipart, because the
+   *  server deliberately does not install python-multipart. */
+  submitVoiceNote: (checkinId: number, audio: Blob) =>
+    request<VoiceUpload>(`/api/checkins/${checkinId}/voice`, {
+      method: "POST",
+      headers: { "Content-Type": audio.type || "audio/webm" },
+      body: audio,
+    }),
+
+  /** Accept or reject the read-back. Only on acceptance does the text come back
+   *  to be submitted with the rest of the form. */
+  confirmVoiceNote: (checkinId: number, confirmed: boolean) =>
+    request<VoiceConfirmation>(`/api/checkins/${checkinId}/voice/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ confirmed }),
+    }),
 
   /** Which model-driven features are actually live. A silently disabled agent
    *  looks identical to one that found nothing — worth checking before a demo. */
@@ -453,6 +548,39 @@ export interface CheckInResult {
   triage_mode: TriageMode;
   rule_reasons: string[];
   agent_reasons: string[];
+  message: string;
+}
+
+// --------------------------------------------------------------------- voice
+/** Response from uploading a recording. `confirmed` is ALWAYS false here: the
+ *  transcript is parked server-side, never recorded, until the read-back is
+ *  confirmed. There is no confidence score high enough to skip that step. */
+export interface VoiceUpload {
+  check_in_id: number;
+  confirmed: false;
+  /** False when confidence was below the threshold, or the provider failed. */
+  usable: boolean;
+  /** The message to show the carer — a read-back, or a request to try again. */
+  readback: string;
+  transcript: string;
+  confidence: number;
+  provider: string;
+  /** Phrases where recognition characteristically drops a negation. "He can't
+   *  move his arm" -> "He can move his arm" is fluent, plausible, and wrong in
+   *  the reassuring direction — the one direction nothing downstream catches. */
+  warnings: string[];
+  /** False means RECOVERYLENS_VOICE is unset. Distinguishing that from "we could
+   *  not hear you" matters: one is a config problem, and telling a carer to speak
+   *  more clearly would be a lie. */
+  voice_configured: boolean;
+}
+
+export interface VoiceConfirmation {
+  check_in_id: number;
+  confirmed: boolean;
+  /** Empty unless confirmed. Returned for the form to submit, not written to the
+   *  check-in here — `/respond` stays the only way to answer one. */
+  transcript: string;
   message: string;
 }
 

@@ -26,45 +26,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-@pytest.fixture
-def client():
-    """A client that does NOT run the startup hook.
-
-    `TestClient(app)` used directly skips lifespan events; `with TestClient(app)`
-    would fire them. Skipping is deliberate and is itself worth asserting: the
-    patient endpoints must not depend on `predictor.load()` unpickling the model
-    artifacts, and they must not start the background scheduler. If a future
-    change makes these routes need either, these tests fail — which is the
-    correct outcome, because it would mean the patient record cannot be served
-    by a process that has no models.
-
-    The tables are created here instead of by `init_db()`. conftest points
-    DATABASE_URL at a throwaway file; this makes each test independent within it.
-    """
-    from api.database import Base, engine
-    from api.main import app
-
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    return TestClient(app)
+# `client`, `db` and `org_id` come from conftest.py — a signed-in clinician
+# against a fresh schema. Every patient below must belong to that clinician's
+# organisation or it is invisible to the scoped queries, which is the correct
+# production behaviour and a confusing empty list in a test.
 
 
-@pytest.fixture
-def db():
-    from api.database import SessionLocal
-
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-
-
-def _patient(db, **kwargs):
+def _patient(db, org_id, **kwargs):
     from api.database import Patient
 
-    defaults = dict(patient_ref="test-01", caregiver_contact="+919999999999",
-                    consent_recorded=True)
+    defaults = dict(organisation_id=org_id, patient_ref="test-01",
+                    caregiver_contact="+919999999999", consent_recorded=True)
     p = Patient(**{**defaults, **kwargs})
     db.add(p)
     db.commit()
@@ -89,8 +61,8 @@ def test_unknown_patient_is_404(client):
     assert client.get("/api/patients/99999").status_code == 404
 
 
-def test_detail_returns_declared_shape(client, db):
-    p = _patient(db)
+def test_detail_returns_declared_shape(client, db, org_id):
+    p = _patient(db, org_id)
     body = client.get(f"/api/patients/{p.id}").json()
 
     # The endpoint returned an undeclared dict before this change, so a missing
@@ -102,7 +74,7 @@ def test_detail_returns_declared_shape(client, db):
 
 
 # ------------------------------------------------------- messaging state truth
-def test_can_send_agrees_with_the_policy_gate(client, db):
+def test_can_send_agrees_with_the_policy_gate(client, db, org_id):
     """The property that matters: no independent re-derivation.
 
     Rather than asserting a hardcoded expectation, this calls `may_send()` — the
@@ -119,7 +91,7 @@ def test_can_send_agrees_with_the_policy_gate(client, db):
         dict(consent_recorded=True, opted_out=False, caregiver_contact=None),
         dict(consent_recorded=True, opted_out=False, caregiver_contact="not-a-phone"),
     ):
-        p = _patient(db, patient_ref=None, **kwargs)
+        p = _patient(db, org_id, patient_ref=None, **kwargs)
         m = client.get(f"/api/patients/{p.id}").json()["messaging"]
 
         expected = may_send(
@@ -133,11 +105,11 @@ def test_can_send_agrees_with_the_policy_gate(client, db):
             assert m["blocked_reason"] == expected.reason, kwargs
 
 
-def test_opt_out_is_reported_even_when_consent_is_recorded(client, db):
+def test_opt_out_is_reported_even_when_consent_is_recorded(client, db, org_id):
     """Opt-out outranks consent. A screen showing "consent: yes" next to a
     silent patient with no explanation is how someone concludes the system is
     broken rather than behaving correctly."""
-    p = _patient(db, consent_recorded=True, opted_out=True)
+    p = _patient(db, org_id, consent_recorded=True, opted_out=True)
     m = client.get(f"/api/patients/{p.id}").json()["messaging"]
 
     assert m["consent_recorded"] is True
@@ -146,9 +118,9 @@ def test_opt_out_is_reported_even_when_consent_is_recorded(client, db):
     assert "opted out" in m["blocked_reason"].lower()
 
 
-def test_full_phone_number_is_never_returned(client, db):
+def test_full_phone_number_is_never_returned(client, db, org_id):
     number = "+919715618753"
-    p = _patient(db, caregiver_contact=number)
+    p = _patient(db, org_id, caregiver_contact=number)
     raw = client.get(f"/api/patients/{p.id}").text
 
     assert number not in raw
@@ -158,8 +130,8 @@ def test_full_phone_number_is_never_returned(client, db):
     assert m["caregiver_contact_on_file"] is True
 
 
-def test_missing_contact_reports_absence_rather_than_a_blank(client, db):
-    p = _patient(db, caregiver_contact=None)
+def test_missing_contact_reports_absence_rather_than_a_blank(client, db, org_id):
+    p = _patient(db, org_id, caregiver_contact=None)
     m = client.get(f"/api/patients/{p.id}").json()["messaging"]
 
     assert m["caregiver_contact_on_file"] is False
@@ -167,19 +139,19 @@ def test_missing_contact_reports_absence_rather_than_a_blank(client, db):
 
 
 # --------------------------------------------------------- whatsapp 24h window
-def test_window_is_closed_when_the_carer_has_never_written(client, db):
-    p = _patient(db)
+def test_window_is_closed_when_the_carer_has_never_written(client, db, org_id):
+    p = _patient(db, org_id)
     m = client.get(f"/api/patients/{p.id}").json()["messaging"]
 
     assert m["whatsapp_window_open"] is False
     assert "never" in m["whatsapp_window_note"].lower()
 
 
-def test_window_open_only_within_24_hours(client, db):
+def test_window_open_only_within_24_hours(client, db, org_id):
     from api.database import utcnow
 
-    recent = _patient(db, last_inbound_at=utcnow() - timedelta(hours=2))
-    stale = _patient(db, last_inbound_at=utcnow() - timedelta(hours=30))
+    recent = _patient(db, org_id, last_inbound_at=utcnow() - timedelta(hours=2))
+    stale = _patient(db, org_id, last_inbound_at=utcnow() - timedelta(hours=30))
 
     assert client.get(f"/api/patients/{recent.id}").json()[
         "messaging"]["whatsapp_window_open"] is True
@@ -190,7 +162,7 @@ def test_window_open_only_within_24_hours(client, db):
 
 
 # ------------------------------------------------------- check-in status logic
-def test_status_separates_our_failure_from_the_carers_silence(client, db):
+def test_status_separates_our_failure_from_the_carers_silence(client, db, org_id):
     """`overdue` and `sent` are the whole point of this field.
 
     A check-in past its date with nothing sent means the scheduler is off, or
@@ -200,7 +172,7 @@ def test_status_separates_our_failure_from_the_carers_silence(client, db):
     """
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     past, future = utcnow() - timedelta(days=2), utcnow() + timedelta(days=5)
 
     overdue = _checkin(db, p.id, scheduled_for=past)
@@ -218,11 +190,11 @@ def test_status_separates_our_failure_from_the_carers_silence(client, db):
     assert got[later.id] == "scheduled"
 
 
-def test_completed_outranks_overdue(client, db):
+def test_completed_outranks_overdue(client, db, org_id):
     """A check-in answered late is answered, not overdue."""
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     c = _checkin(db, p.id, scheduled_for=utcnow() - timedelta(days=10),
                  completed_at=utcnow())
     body = client.get(f"/api/patients/{p.id}").json()
@@ -230,10 +202,10 @@ def test_completed_outranks_overdue(client, db):
     assert c.id == body["check_ins"][0]["id"]
 
 
-def test_check_ins_read_forwards(client, db):
+def test_check_ins_read_forwards(client, db, org_id):
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     for offset in (10, -5, 3):
         _checkin(db, p.id, scheduled_for=utcnow() + timedelta(days=offset))
 
@@ -242,10 +214,10 @@ def test_check_ins_read_forwards(client, db):
     assert days == sorted(days)
 
 
-def test_next_check_in_skips_past_and_completed(client, db):
+def test_next_check_in_skips_past_and_completed(client, db, org_id):
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     _checkin(db, p.id, scheduled_for=utcnow() - timedelta(days=3))
     _checkin(db, p.id, scheduled_for=utcnow() + timedelta(days=2),
              completed_at=utcnow())
@@ -257,7 +229,7 @@ def test_next_check_in_skips_past_and_completed(client, db):
 
 
 # ------------------------------------------------------------------- escalation
-def test_triage_record_is_returned_whole(client, db):
+def test_triage_record_is_returned_whole(client, db, org_id):
     """Rule reasons and agent reasons stay separate all the way to the client.
 
     Merging them server-side would be tidier and would destroy the reviewer's
@@ -265,7 +237,7 @@ def test_triage_record_is_returned_whole(client, db):
     """
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     triage = {
         "escalated": True, "escalation_reason": "New confusion reported",
         "rule_reasons": [], "agent_reasons": ["sudden-onset cognitive change"],
@@ -285,10 +257,10 @@ def test_triage_record_is_returned_whole(client, db):
     assert c["triage"]["tool_calls"][0]["name"] == "check_in_history"
 
 
-def test_open_escalations_counted_on_both_endpoints(client, db):
+def test_open_escalations_counted_on_both_endpoints(client, db, org_id):
     from api.database import utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     _checkin(db, p.id, completed_at=utcnow(), escalated=True, urgency="urgent")
     _checkin(db, p.id, completed_at=utcnow(), escalated=True, urgency="soon")
     _checkin(db, p.id, completed_at=utcnow(), escalated=False)
@@ -299,11 +271,11 @@ def test_open_escalations_counted_on_both_endpoints(client, db):
 
 
 # -------------------------------------------------------------- list endpoint
-def test_list_surfaces_the_two_silent_failures(client, db):
+def test_list_surfaces_the_two_silent_failures(client, db, org_id):
     """A row for a patient nobody is contacting must not look like a healthy one."""
-    ok = _patient(db, patient_ref="ok", consent_recorded=True)
-    no_consent = _patient(db, patient_ref="no-consent", consent_recorded=False)
-    gone = _patient(db, patient_ref="opted-out", opted_out=True)
+    ok = _patient(db, org_id, patient_ref="ok", consent_recorded=True)
+    no_consent = _patient(db, org_id, patient_ref="no-consent", consent_recorded=False)
+    gone = _patient(db, org_id, patient_ref="opted-out", opted_out=True)
 
     rows = {r["patient_ref"]: r for r in client.get("/api/patients").json()}
     assert rows["ok"]["consent_recorded"] is True and rows["ok"]["opted_out"] is False
@@ -312,21 +284,21 @@ def test_list_surfaces_the_two_silent_failures(client, db):
     assert {ok.id, no_consent.id, gone.id} <= {r["id"] for r in rows.values()}
 
 
-def test_patient_with_no_assessments_does_not_break_either_endpoint(client, db):
+def test_patient_with_no_assessments_does_not_break_either_endpoint(client, db, org_id):
     """The list used to index `results["risks"]` unguarded."""
-    p = _patient(db)
+    p = _patient(db, org_id)
     assert client.get(f"/api/patients/{p.id}").json()["latest_tier_summary"] is None
     row = next(r for r in client.get("/api/patients").json() if r["id"] == p.id)
     assert row["latest_tier_summary"] is None
     assert row["assessment_count"] == 0
 
 
-def test_assessment_inputs_are_returned_for_review(client, db):
+def test_assessment_inputs_are_returned_for_review(client, db, org_id):
     """A tier with no visible input is not reviewable — a clinician disagreeing
     with it needs to see whether the model or the data is wrong."""
     from api.database import Assessment
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     db.add(Assessment(
         patient_id=p.id,
         inputs={"age": 74, "sex": "F", "deficit_arm": "present"},
@@ -343,10 +315,10 @@ def test_assessment_inputs_are_returned_for_review(client, db):
         "latest_tier_summary"] == {"death_14d": "moderate"}
 
 
-def test_assessments_are_newest_first(client, db):
+def test_assessments_are_newest_first(client, db, org_id):
     from api.database import Assessment, utcnow
 
-    p = _patient(db)
+    p = _patient(db, org_id)
     for days in (0, 5, 2):
         db.add(Assessment(patient_id=p.id,
                           created_at=utcnow() - timedelta(days=days),

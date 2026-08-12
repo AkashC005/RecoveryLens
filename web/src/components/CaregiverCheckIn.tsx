@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import { api, URGENCY_STYLES } from "../lib/api";
 import type { CheckInResult, DueCheckIn } from "../lib/api";
+import VoiceNote from "./VoiceNote";
 
 function Toggle({ label, hint, value, onChange }: {
   label: string;
@@ -51,7 +52,15 @@ function Toggle({ label, hint, value, onChange }: {
   );
 }
 
-export default function CaregiverCheckIn() {
+export default function CaregiverCheckIn({
+  carerToken,
+}: {
+  /** Present when a carer arrived from their own link. They see exactly one
+   *  check-in — theirs — because `/api/checkins/due` is clinician-only and
+   *  handing a carer every due check-in in the hospital would be the leak the
+   *  whole access-control change exists to close. */
+  carerToken?: string | null;
+} = {}) {
   const [due, setDue] = useState<DueCheckIn[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [taking, setTaking] = useState(true);
@@ -69,6 +78,16 @@ export default function CaregiverCheckIn() {
   const [showingScheduled, setShowingScheduled] = useState(false);
 
   useEffect(() => {
+    if (carerToken) {
+      api.checkInByToken(carerToken)
+        .then((c) => {
+          setDue([c]);
+          setSelected(c.id);
+        })
+        .catch((e) => setError(String(e)));
+      return;
+    }
+
     api.dueCheckIns()
       .then(async (rows) => {
         if (rows.length === 0) {
@@ -82,7 +101,7 @@ export default function CaregiverCheckIn() {
         setSelected(rows[0].id);
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [carerToken]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -149,7 +168,7 @@ export default function CaregiverCheckIn() {
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      {showingScheduled && (
+      {showingScheduled && !carerToken && (
         <div className="card p-3">
           <p className="text-xs text-muted">
             None of these check-ins is due yet — the first is scheduled for day 3
@@ -160,7 +179,7 @@ export default function CaregiverCheckIn() {
         </div>
       )}
 
-      {due.length > 1 && (
+      {due.length > 1 && !carerToken && (
         <div className="card p-4">
           <label className="field-label" htmlFor="checkin">Which check-in?</label>
           <select
@@ -214,6 +233,20 @@ export default function CaregiverCheckIn() {
           className="field-input resize-y"
         />
       </div>
+
+      {/* A confirmed transcript lands in the box above rather than being sent
+          separately. One field, one submission, one path to the triage agent —
+          so a spoken note and a typed one are read identically, and there is no
+          second way to answer a check-in. The carer can also edit it afterwards,
+          which is the point of putting it somewhere visible. */}
+      <VoiceNote
+        checkInId={selected}
+        disabled={busy}
+        onConfirmed={(text) =>
+          setFreeText((existing) =>
+            existing.trim() ? `${existing.trim()}\n\n${text}` : text)
+        }
+      />
 
       {error && <p className="text-sm text-signal">{error}</p>}
 

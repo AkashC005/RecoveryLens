@@ -39,13 +39,29 @@ FOOTER = (
 
 
 def compose_checkin(day: int, label: str, caregiver_message: str = "",
-                    patient_ref: str | None = None) -> str:
-    """One check-in message.
+                    patient_ref: str | None = None,
+                    language: str | None = None) -> tuple[str, dict]:
+    """One check-in message, in the carer's language. Returns (body, translation).
 
     `caregiver_message` is the generated, guideline-grounded text from
     guidance/followup.py. It is included when short enough to keep the whole
-    message scannable, and truncated at a sentence boundary rather than
-    mid-word if not.
+    message scannable, and truncated at a sentence boundary rather than mid-word
+    if not.
+
+    The WHOLE message is translated as one unit rather than phrase by phrase.
+    Translating the fragments separately would produce something grammatical in
+    neither language: the questions and the footer read as one piece of writing,
+    and word order differs enough that stitching translated parts together
+    reliably breaks.
+
+    Everything here is text RecoveryLens wrote — the label, the questions, the
+    generated caregiver line. No quoted guideline excerpt reaches this function,
+    which is why it can be translated at all. `translate()` enforces that with a
+    required `provenance` argument.
+
+    Returns the translation record alongside the body so the caller can store why
+    a message went out in English when the patient's language is Tamil. A silent
+    fallback to English looks identical to a system that never supported Tamil.
     """
     who = f" for {patient_ref}" if patient_ref else ""
     parts = [f"RecoveryLens check-in{who} — day {day} ({label})."]
@@ -55,7 +71,12 @@ def compose_checkin(day: int, label: str, caregiver_message: str = "",
 
     parts.append(QUESTIONS)
     parts.append(FOOTER)
-    return "\n\n".join(parts)
+    english = "\n\n".join(parts)
+
+    from guidance.translate import translate
+
+    result = translate(english, language or "en", provenance="generated")
+    return result.text, result.to_json()
 
 
 def compose_confirmation(escalated: bool, urgency: str = "routine") -> str:

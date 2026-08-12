@@ -63,12 +63,17 @@ class SendResult:
     message_id: str | None = None
     error: str | None = None
     suppressed_reason: str | None = None   # set when policy blocked the send
+    # The audio that accompanied the text, if any. Recorded so a failure to attach
+    # audio is visible as "text only" rather than as a successful send that
+    # happened to be silent.
+    media_url: str | None = None
 
 
 class Sender(Protocol):
     channel: str
 
-    def send(self, to: str, body: str) -> SendResult: ...
+    def send(self, to: str, body: str,
+             media_url: str | None = None) -> SendResult: ...
 
 
 class ConsoleSender:
@@ -84,13 +89,18 @@ class ConsoleSender:
     def __init__(self, echo: bool = True):
         self.echo = echo
         self.sent: list[tuple[str, str]] = []
+        self.media: list[str | None] = []
 
-    def send(self, to: str, body: str) -> SendResult:
+    def send(self, to: str, body: str,
+             media_url: str | None = None) -> SendResult:
         self.sent.append((to, body))
+        self.media.append(media_url)
         if self.echo:
-            print(f"\n--- [console sender] to {to} ---\n{body}\n---\n")
+            audio = f"\n[audio] {media_url}" if media_url else ""
+            print(f"\n--- [console sender] to {to} ---\n{body}{audio}\n---\n")
         return SendResult(ok=True, channel=self.channel, to=to,
-                          message_id=f"console-{len(self.sent)}")
+                          message_id=f"console-{len(self.sent)}",
+                          media_url=media_url)
 
 
 class TwilioSender:
@@ -114,23 +124,55 @@ class TwilioSender:
                 "TwilioSender needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and "
                 "TWILIO_FROM. See .env.example.")
 
-    def send(self, to: str, body: str) -> SendResult:
+    def send(self, to: str, body: str,
+             media_url: str | None = None) -> SendResult:
         try:
             from twilio.rest import Client
         except ImportError:
             return SendResult(ok=False, channel=self.channel, to=to,
                               error="twilio SDK not installed")
+
+        # Twilio FETCHES media_url itself, from its own servers. A localhost or
+        # private address cannot work and fails with an unhelpful error, so it is
+        # dropped here with a readable reason instead. The text still goes.
+        if media_url and not _publicly_fetchable(media_url):
+            print(f"[sender] dropping media_url {media_url!r}: Twilio must fetch "
+                  f"it from the internet, and that address is not reachable. "
+                  f"Set RECOVERYLENS_PUBLIC_URL to your ngrok or deployed URL.")
+            media_url = None
+
         try:
             client = Client(self.account_sid, self.auth_token)
-            msg = client.messages.create(
-                body=body, from_=self.from_, to=_normalise(to, self.from_))
+            kwargs = {"body": body, "from_": self.from_,
+                      "to": _normalise(to, self.from_)}
+            if media_url:
+                kwargs["media_url"] = [media_url]
+            msg = client.messages.create(**kwargs)
             return SendResult(ok=True, channel=self.channel, to=to,
-                              message_id=msg.sid)
+                              message_id=msg.sid, media_url=media_url)
         except Exception as exc:
             # A failed send must never lose the check-in. The caller leaves it
             # pending and retries; see scheduler.py.
             return SendResult(ok=False, channel=self.channel, to=to,
                               error=_readable_twilio_error(exc))
+
+
+def _publicly_fetchable(url: str) -> bool:
+    """Whether Twilio's servers could plausibly reach this URL.
+
+    Not a security control — it is a diagnostic. Attaching a localhost media URL
+    produces a Twilio error that says nothing about the real problem, and the
+    real problem is always the same one: the tunnel is not configured.
+    """
+    lowered = url.lower()
+    if not lowered.startswith(("http://", "https://")):
+        return False
+    host = lowered.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return False
+    return not (host.startswith(("10.", "192.168.", "172.16.", "172.17.",
+                                 "172.18.", "172.19.", "172.2", "172.30.",
+                                 "172.31.")) or host.endswith(".local"))
 
 
 # Twilio's exception text is a formatted terminal block: ANSI colour codes, the

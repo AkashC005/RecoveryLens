@@ -63,6 +63,8 @@ ISOLATED_VARS = [
     "RECOVERYLENS_EMBEDDINGS",
     "RECOVERYLENS_VOICE",
     "RECOVERYLENS_MESSAGING",
+    "RECOVERYLENS_TRANSLATE",
+    "RECOVERYLENS_PUBLIC_URL",
     # credentials
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -93,6 +95,107 @@ def isolate_environment(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     for var, value in OVERRIDDEN_VARS.items():
         monkeypatch.setenv(var, value)
+
+
+# ---------------------------------------------------------------------------
+# Shared HTTP fixtures.
+#
+# Every endpoint that reads patient data now requires a session, so any test
+# going through HTTP needs credentials. These live here rather than being copied
+# into each file: three copies of "log in" is three places for a test to
+# accidentally authenticate as the wrong organisation and pass for the wrong
+# reason.
+#
+# `test_auth.py` deliberately defines its OWN unauthenticated client, because it
+# is testing what happens before anyone signs in.
+# ---------------------------------------------------------------------------
+TEST_PASSWORD = "test-passphrase-long-enough"
+
+
+@pytest.fixture
+def db():
+    from api.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def client():
+    """A signed-in clinician against a freshly created schema.
+
+    Uses `TestClient(app)` WITHOUT the context manager, so the startup hook does
+    not run. That is deliberate and load-bearing: it asserts these endpoints do
+    not depend on `predictor.load()` unpickling model artifacts, and it stops the
+    background scheduler from starting during tests.
+    """
+    from fastapi.testclient import TestClient
+
+    from api.database import Base, engine
+    from api.main import app
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    c = TestClient(app)
+    r = c.post("/api/auth/bootstrap", json={
+        "email": "clinician@test.local", "password": TEST_PASSWORD,
+        "organisation": "Test Stroke Unit"})
+    assert r.status_code == 200, r.text
+    return c
+
+
+def iter_api_routes(app):
+    """Every route in the app, including those inside included routers.
+
+    `app.routes` does NOT contain them flat. This FastAPI version wraps each
+    `include_router()` call in an `_IncludedRouter` object, so a naive walk of
+    `app.routes` sees only the routes declared directly in `main.py`.
+
+    That mattered: `test_every_patient_route_is_in_the_protected_list` was written
+    to enumerate the live route table precisely so a new unprotected endpoint
+    could not slip past, and it was silently skipping the entire webhook and voice
+    surface — the routes most likely to be forgotten, since they are the ones a
+    browser never calls. The guard was giving false comfort.
+
+    Yields (path, endpoint) for anything with both.
+    """
+    def walk(routes):
+        for route in routes:
+            # An included router exposes its own routes under `original_router`,
+            # not `routes`. Both are checked because the attribute has moved
+            # between FastAPI versions and this walk must not quietly return less
+            # than it did before — that is exactly the failure it exists to catch.
+            for attr in ("routes", "original_router"):
+                nested = getattr(route, attr, None)
+                nested = getattr(nested, "routes", nested)
+                if nested and nested is not routes:
+                    yield from walk(nested)
+
+            path = getattr(route, "path", None)
+            endpoint = getattr(route, "endpoint", None)
+            if path and endpoint:
+                yield path, endpoint
+
+    seen: set[tuple[str, object]] = set()
+    for path, endpoint in walk(app.routes):
+        key = (path, endpoint)
+        if key not in seen:
+            seen.add(key)
+            yield path, endpoint
+
+
+@pytest.fixture
+def org_id(client):
+    """The organisation every fixture-created patient must belong to.
+
+    A patient with no organisation is invisible to every scoped query — the safe
+    direction for production, and a silent empty list in a test. Requesting this
+    fixture makes the requirement explicit.
+    """
+    return client.get("/api/auth/me").json()["organisation_id"]
 
 
 def pytest_configure(config):

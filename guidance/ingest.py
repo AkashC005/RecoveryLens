@@ -113,6 +113,28 @@ _RCP_LETTER = re.compile(r"^([A-Z])$")
 # full text. The preview ends in this, and indexing both would duplicate content.
 _RCP_TRUNCATED = "Show more"
 
+# Every RCP section ends with an apparatus block — "Sources, evidence to
+# recommendations, implications" — holding provenance notes and cross-reference
+# lists. Without a boundary the LAST lettered recommendation in each section
+# absorbs it: 94 of 512 chunks (18%) were contaminated, and some consisted of
+# nothing but a list of links to other sections. One of those would have been
+# quoted verbatim to a clinician under a real recommendation number.
+#
+# Treated as an end-of-recommendations marker rather than something to strip after
+# the fact, because the text is a legitimate part of the page and the problem is
+# only that it is not a recommendation.
+_RCP_END_MARKER = re.compile(
+    r"^(?:#{2,4}\s*)?(?:Sources,?\s*evidence to recommendations"
+    r"|Evidence to recommendations"
+    r"|Sources,?\s*evidence and implications"
+    r"|Implications)\b", re.IGNORECASE)
+
+# A cross-reference list masquerading as a recommendation: "( Section 3.4
+# Diagnosis ... , Section 3.5 Management ... )". Two or more of these and the
+# chunk is navigation, whatever else it contains.
+_RCP_XREF = re.compile(r"Section\s+\d+\.\d+", re.IGNORECASE)
+MAX_XREFS = 2
+
 # --- ISA (PDF) --------------------------------------------------------------
 # "12.0 STROKE REHABILITATION" — ISA numbers SECTIONS but not recommendations.
 _ISA_SECTION = re.compile(r"^(\d+\.\d)\s+([A-Z][A-Z\s,()/&-]{4,})\s*$")
@@ -257,7 +279,10 @@ def parse_rcp(text: str, source_id: str) -> list[Chunk]:
         if section and letter and buffer:
             body = clean(" ".join(buffer))
             words = len(body.split())
-            if MIN_WORDS <= words <= RCP_MAX_WORDS:
+            # A chunk that is mostly a list of links to other sections is
+            # navigation, not guidance, however plausible its section number.
+            navigation = len(_RCP_XREF.findall(body)) >= MAX_XREFS
+            if MIN_WORDS <= words <= RCP_MAX_WORDS and not navigation:
                 chunks.append(Chunk(
                     source_id=source_id, section=f"{section} {letter}",
                     heading=heading, text=body, year_tag=year))
@@ -278,6 +303,13 @@ def parse_rcp(text: str, source_id: str) -> list[Chunk]:
         if _RCP_RECS_MARKER.match(line):
             _flush()
             in_recs = True
+            continue
+
+        # The apparatus block that follows the recommendations. Ends collection
+        # for this section; the next section heading reopens it.
+        if _RCP_END_MARKER.match(line):
+            _flush()
+            in_recs = False
             continue
 
         if not in_recs:

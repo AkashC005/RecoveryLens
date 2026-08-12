@@ -9,15 +9,18 @@ import RiskTimeline from "./components/RiskTimeline";
 import CaregiverCheckIn from "./components/CaregiverCheckIn";
 import ClinicianInbox from "./components/ClinicianInbox";
 import PatientDetail from "./components/PatientDetail";
-import type { AssessmentResponse, PatientSummary } from "./lib/api";
-import { api, TIER_STYLES } from "./lib/api";
+import SignIn from "./components/SignIn";
+import type { AssessmentResponse, Me, PatientSummary } from "./lib/api";
+import { api, NotSignedIn, setCheckInToken, TIER_STYLES } from "./lib/api";
 
 type View = "assess" | "result" | "patients" | "patient" | "checkin" | "inbox";
 
-function Header({ view, setView, online }: {
+function Header({ view, setView, online, me, onSignOut }: {
   view: View;
   setView: (v: View) => void;
   online: boolean | null;
+  me: Me | null;
+  onSignOut: () => void;
 }) {
   const tabs: { id: View; label: string }[] = [
     { id: "assess", label: "New assessment" },
@@ -49,15 +52,28 @@ function Header({ view, setView, online }: {
             </button>
           ))}
         </nav>
-        <span className="ml-auto flex items-center gap-2 text-xs text-muted">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              online === null ? "bg-muted" : online ? "bg-teal" : "bg-signal"
-            }`}
-            aria-hidden
-          />
-          {online === null ? "Connecting…" : online ? "API connected" : "API offline"}
-        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span className="flex items-center gap-2 text-xs text-muted">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                online === null ? "bg-muted" : online ? "bg-teal" : "bg-signal"
+              }`}
+              aria-hidden
+            />
+            {online === null ? "Connecting…" : online ? "API connected" : "API offline"}
+          </span>
+          {me && (
+            <span className="flex items-center gap-3 text-xs text-muted">
+              {/* The organisation, not just the user. Which patients this screen
+                  can show is a property of the organisation, so it belongs where
+                  it can be checked at a glance. */}
+              <span>{me.organisation || me.email}</span>
+              <button onClick={onSignOut} className="text-teal hover:text-bone">
+                Sign out
+              </button>
+            </span>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -150,7 +166,16 @@ export default function App() {
   const [result, setResult] = useState<AssessmentResponse | null>(null);
   const [patientId, setPatientId] = useState<number | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const reduce = useReducedMotion();
+
+  // A carer arriving from their own link. Detected before anything asks for a
+  // session, because a carer has no account and must never be shown a login form
+  // — they would reasonably conclude the link was broken and stop answering.
+  const carerToken = new URLSearchParams(window.location.search).get("token");
+  const isCarer = Boolean(carerToken);
+  if (isCarer) setCheckInToken(carerToken);
 
   const openPatient = (id: number) => {
     setPatientId(id);
@@ -161,6 +186,33 @@ export default function App() {
     api.health().then(() => setOnline(true)).catch(() => setOnline(false));
   }, []);
 
+  useEffect(() => {
+    if (isCarer) {
+      setAuthChecked(true);
+      setView("checkin");
+      return;
+    }
+    // A 401 here is the normal first-visit state, not an error worth showing.
+    api.me()
+      .then(setMe)
+      .catch((e) => {
+        if (!(e instanceof NotSignedIn)) console.error(e);
+      })
+      .finally(() => setAuthChecked(true));
+  }, [isCarer]);
+
+  async function signOut() {
+    try {
+      await api.logout();
+    } finally {
+      // Cleared locally whatever the server said. A failed logout request must
+      // not leave the screen looking signed in.
+      setMe(null);
+      setView("assess");
+      setPatientId(null);
+    }
+  }
+
   const fade = reduce
     ? {}
     : {
@@ -170,9 +222,61 @@ export default function App() {
         transition: { duration: 0.2 },
       };
 
+  // ---------------------------------------------------------------- gates
+  if (!authChecked)
+    return (
+      <div className="min-h-screen bg-ink p-8">
+        <p className="text-sm text-muted">Connecting…</p>
+      </div>
+    );
+
+  // The carer's view: one check-in, theirs, and no navigation to anything else.
+  // Rendered before the session gate, because a carer has no session and showing
+  // them a login form would read as a broken link.
+  if (isCarer)
+    return (
+      <div className="min-h-screen bg-ink">
+        <header className="border-b border-raised">
+          <div className="mx-auto max-w-2xl px-5 py-4">
+            <h1 className="text-lg font-semibold tracking-tight text-bone">
+              RecoveryLens
+            </h1>
+            <p className="text-xs text-muted">Check-in</p>
+          </div>
+        </header>
+        <main className="mx-auto max-w-2xl px-5 py-8">
+          <h2 className="text-xl font-semibold text-bone">How are they doing?</h2>
+          <p className="mt-1 mb-6 max-w-prose text-sm text-muted">
+            A few short questions, and space to say anything else you&rsquo;ve
+            noticed. This link is just for this check-in.
+          </p>
+          <CaregiverCheckIn carerToken={carerToken} />
+        </main>
+      </div>
+    );
+
+  if (!me) {
+    return (
+      <div className="min-h-screen bg-ink">
+        <header className="border-b border-raised">
+          <div className="mx-auto max-w-5xl px-5 py-4">
+            <h1 className="text-lg font-semibold tracking-tight text-bone">
+              RecoveryLens
+            </h1>
+            <p className="text-xs text-muted">Post-stroke risk and follow-up</p>
+          </div>
+        </header>
+        <main className="mx-auto max-w-5xl px-5 py-12">
+          <SignIn onSignedIn={setMe} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-ink">
-      <Header view={view} setView={setView} online={online} />
+      <Header view={view} setView={setView} online={online} me={me}
+              onSignOut={signOut} />
 
       <main className="mx-auto max-w-5xl px-5 py-8">
         <AnimatePresence mode="wait">

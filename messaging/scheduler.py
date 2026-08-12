@@ -48,6 +48,10 @@ import traceback
 SEND_INTERVAL_MINUTES = 15
 SWEEP_INTERVAL_MINUTES = 30
 
+# Generated audio expires after 15 minutes (MEDIA_TTL). Purging every 10 keeps
+# the window between "the URL stopped working" and "the bytes are gone" short.
+MEDIA_PURGE_MINUTES = 10
+
 # Cap per run. A bug that marks hundreds of check-ins due should produce a
 # visible backlog, not hundreds of WhatsApp messages to worried families.
 MAX_SENDS_PER_RUN = 25
@@ -131,6 +135,23 @@ def sweep_unconfirmed_voice(db_factory) -> list[int]:
         db.close()
 
 
+def purge_expired_media(db_factory) -> int:
+    """Delete audio whose URL has expired.
+
+    Expiry stops a URL working; this stops the bytes existing. For a recording
+    describing a stroke patient's care those are not the same guarantee, and the
+    difference is the whole reason this job exists rather than relying on the
+    404.
+    """
+    from api.media import purge_expired
+
+    db = db_factory()
+    try:
+        return purge_expired(db)
+    finally:
+        db.close()
+
+
 def start(db_factory) -> object | None:
     """Start the background scheduler. Returns it, or None if disabled.
 
@@ -165,6 +186,11 @@ def start(db_factory) -> object | None:
             print(f"[scheduler] escalated {len(ids)} unconfirmed voice "
                   f"transcripts: {ids}")
 
+    def _purge_job():
+        removed = purge_expired_media(db_factory)
+        if removed:
+            print(f"[scheduler] purged {removed} expired audio file(s)")
+
     # coalesce: if the app was asleep, run once on wake rather than once per
     # missed interval — the Render free tier sleeps after 15 minutes idle, and
     # a night's worth of catch-up runs firing at once would be a bad surprise.
@@ -172,9 +198,12 @@ def start(db_factory) -> object | None:
                       id="send_due_checkins", coalesce=True, max_instances=1)
     scheduler.add_job(_sweep_job, "interval", minutes=SWEEP_INTERVAL_MINUTES,
                       id="sweep_unconfirmed_voice", coalesce=True, max_instances=1)
+    scheduler.add_job(_purge_job, "interval", minutes=MEDIA_PURGE_MINUTES,
+                      id="purge_expired_media", coalesce=True, max_instances=1)
 
     scheduler.start()
     print(f"[scheduler] running. Sends every {SEND_INTERVAL_MINUTES}m, "
           f"voice sweep every {SWEEP_INTERVAL_MINUTES}m, "
+          f"media purge every {MEDIA_PURGE_MINUTES}m, "
           f"max {MAX_SENDS_PER_RUN} sends per run.")
     return scheduler

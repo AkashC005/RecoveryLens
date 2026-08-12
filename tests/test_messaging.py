@@ -170,7 +170,7 @@ def test_submission_shape_matches_the_api():
 
 # ------------------------------------------------------------------ composing
 def test_checkin_message_has_the_required_elements():
-    msg = compose_checkin(day=7, label="One-week review",
+    msg, _ = compose_checkin(day=7, label="One-week review",
                           caregiver_message="Keep an eye on their swallowing.")
     assert "STOP" in msg                      # opt-out, every time
     assert "emergenc" in msg.lower()          # not for emergencies
@@ -202,7 +202,7 @@ def test_stop_confirmation_is_unconditional_and_reassuring_about_care():
 
 
 def test_long_guidance_is_trimmed_not_truncated_mid_word():
-    msg = compose_checkin(day=42, label="Six-week review",
+    msg, _ = compose_checkin(day=42, label="Six-week review",
                           caregiver_message="word " * 200)
     assert len(msg) < 900
     assert "wor…" not in msg

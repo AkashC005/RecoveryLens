@@ -154,6 +154,8 @@ function CheckInRow({ c }: { c: CheckInRecord }) {
   const meta = CHECKIN_STATUS_META[c.status] ?? CHECKIN_STATUS_META.scheduled;
   const urgency = URGENCY_STYLES[c.urgency] ?? URGENCY_STYLES.routine;
   const note = (c.responses?.free_text as string) || "";
+  const [link, setLink] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   return (
     <li className="border-l-2 border-raised pl-4">
@@ -185,6 +187,30 @@ function CheckInRow({ c }: { c: CheckInRecord }) {
       )}
 
       <AgentTrace triage={c.triage} labelClosed="How this was triaged" />
+
+      {/* The carer's way in. Issued on demand rather than shown by default,
+          because the token IS the credential — printing every one on the page
+          would put them in screenshots and screen shares. */}
+      {c.status !== "completed" && (
+        <div className="mt-2">
+          {link ? (
+            <p className="break-all font-mono text-xs text-teal">{link}</p>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                api.checkInLink(c.id)
+                  .then((r) => setLink(`${window.location.origin}${r.path}`))
+                  .catch((e) => setLinkError(String(e)))
+              }
+              className="text-xs text-teal"
+            >
+              Get the carer&rsquo;s link
+            </button>
+          )}
+          {linkError && <p className="text-xs text-signal">{linkError}</p>}
+        </div>
+      )}
     </li>
   );
 }

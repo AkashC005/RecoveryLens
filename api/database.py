@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import os
 
 from sqlalchemy import (JSON, Boolean, Column, DateTime, ForeignKey, Integer,
-                        String, create_engine)
+                        LargeBinary, String, create_engine)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./recoverylens.db")
@@ -31,14 +31,92 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Organisation(Base):
+    """A tenant. One hospital, one stroke unit, one clinic.
+
+    Patients belong to an organisation and clinicians only ever see their own.
+    Without this, "authentication" would mean every logged-in user can read every
+    patient in the database — which is authentication without authorisation, and
+    is the failure people actually get breached by.
+    """
+    __tablename__ = "organisations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+    users = relationship("User", back_populates="organisation",
+                         cascade="all, delete-orphan")
+
+
+class User(Base):
+    """A clinician. Not a patient and not a carer — neither of those log in.
+
+    Carers reach their own check-in through a per-check-in token instead
+    (`CheckIn.access_token`). Asking the family of a stroke patient to create an
+    account and remember a password, on a phone, while worried, would mean the
+    check-ins simply do not get answered.
+    """
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organisation_id = Column(Integer, ForeignKey("organisations.id"), index=True,
+                             nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    # scrypt, salted per user. See api/auth.py — the format and parameters are
+    # stored with the hash so they can be raised later without invalidating
+    # everyone's password.
+    password_hash = Column(String, nullable=False)
+    full_name = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+    disabled = Column(Boolean, default=False, index=True)
+
+    organisation = relationship("Organisation", back_populates="users")
+    sessions = relationship("UserSession", back_populates="user",
+                            cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    """A server-side session. Deliberately not a JWT.
+
+    A JWT cannot be revoked before it expires without keeping a denylist, which
+    is a session table with extra steps. For a system holding clinical data,
+    "log this person out right now" has to actually work — so the token is an
+    opaque random string and the record here is the authority.
+
+    Only the HASH of the token is stored. A database dump should not hand over
+    live sessions.
+    """
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    token_hash = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    expires_at = Column(DateTime, index=True, nullable=False)
+    revoked = Column(Boolean, default=False, index=True)
+
+    user = relationship("User", back_populates="sessions")
+
+
 class Patient(Base):
     __tablename__ = "patients"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Nullable so existing rows survive the migration; every new patient gets one
+    # from the creating user. Queries filter on it, so a null-org patient is
+    # invisible rather than visible to everyone — the safe direction.
+    organisation_id = Column(Integer, ForeignKey("organisations.id"), index=True,
+                             nullable=True)
     patient_ref = Column(String, index=True, nullable=True)
     caregiver_contact = Column(String, index=True, nullable=True)
     consent_recorded = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utcnow)
+
+    # BCP-47-ish language tag for the carer's messages: "en", "ta", "hi".
+    # Clinician-facing text is always English regardless — see guidance/translate.py.
+    language = Column(String, default="en")
 
     # Set when a carer replies STOP. Permanent and outranks consent — an opt-out
     # is a withdrawal, and must not be overridden by an older consent record.
@@ -92,7 +170,48 @@ class CheckIn(Base):
     urgency = Column(String, default="routine", index=True)
     triage = Column(JSON, nullable=True)
 
+    # How a carer reaches THIS check-in without an account. Unguessable, scoped to
+    # one check-in, and useless once the check-in is answered. A carer gets a link
+    # containing it; they never see another patient's anything.
+    #
+    # Nullable because existing rows predate it. `access_token_for()` mints one on
+    # demand rather than requiring a backfill.
+    access_token = Column(String, unique=True, index=True, nullable=True)
+
     patient = relationship("Patient", back_populates="check_ins")
+
+
+class MediaAsset(Base):
+    """One generated audio file, served from an unguessable expiring URL.
+
+    Twilio cannot hold a session cookie: to attach audio to a WhatsApp message it
+    must fetch a publicly reachable URL itself. That is a deliberate hole in the
+    authentication boundary, so it is made as narrow as a hole can be:
+
+      - the token is 256 bits of randomness and IS the credential
+      - one asset per token; there is no listing route and no enumerable id
+      - `expires_at` is short, because Twilio fetches within seconds
+      - the spoken text deliberately EXCLUDES the patient reference, so even a
+        leaked URL discloses generic guidance rather than who it is about
+
+    Bytes live in the database rather than on disk. Render's free tier has an
+    ephemeral filesystem, so a file written before a restart is gone while the row
+    pointing at it survives — a dangling reference is worse than a slightly larger
+    database. Expiry and purging are then one query rather than a cron job over a
+    directory.
+    """
+    __tablename__ = "media_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    check_in_id = Column(Integer, ForeignKey("check_ins.id"), index=True,
+                         nullable=True)
+    mime_type = Column(String, default="audio/ogg")
+    data = Column(LargeBinary, nullable=False)
+    language = Column(String, default="en")
+    created_at = Column(DateTime, default=utcnow)
+    expires_at = Column(DateTime, index=True, nullable=False)
+    fetch_count = Column(Integer, default=0)
 
 
 def init_db() -> None:

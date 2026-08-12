@@ -14,7 +14,7 @@ demonstrable artifact before any frontend exists.
 from datetime import timedelta, timezone
 import os
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -24,10 +24,19 @@ from guidance.selector import selector as guidance_selector, selector_enabled
 from guidance.retrieval import _synthesis_enabled as _synthesis_on
 from triage import TriageAgent, agent_enabled
 
+from pydantic import BaseModel
+
+from .auth import (COOKIE_NAME, access_token_for, bootstrap_available,
+                   caregiver_or_clinician_checkin, checkin_by_access_token,
+                   clear_session_cookie, create_session, create_user,
+                   current_user, dev_login_hint, revoke_session, scoped_checkin,
+                   scoped_patient, scoped_patients, set_session_cookie,
+                   verify_password)
 from .triage_tools import DatabaseToolBox
+from .media import router as media_router
 from .webhooks import router as messaging_router
 
-from .database import (Assessment, CheckIn, Patient, SessionLocal, get_db,
+from .database import (Assessment, CheckIn, Patient, SessionLocal, User, get_db,
                        init_db, utcnow)
 from .predictor import predictor
 from .schemas import (AssessmentRecord, AssessmentRequest, AssessmentResponse,
@@ -60,6 +69,7 @@ app.add_middleware(
 
 
 app.include_router(messaging_router)
+app.include_router(media_router)
 
 # Held so the shutdown hook can stop it. None when scheduling is disabled.
 _scheduler = None
@@ -98,6 +108,10 @@ def startup() -> None:
         print(f"[scheduler] could not start ({type(exc).__name__}: {exc}). "
               f"Check-ins can still be sent manually.")
 
+    with SessionLocal() as session:
+        if bootstrap_available(session):
+            print(f"\n{dev_login_hint()}\n")
+
     print("Ready.")
 
 
@@ -121,6 +135,142 @@ def health():
         "models_loaded": len(predictor.models),
         "ready": predictor.loaded,
     }
+
+
+# --------------------------------------------------------------------------- auth
+class BootstrapRequest(BaseModel):
+    email: str
+    password: str
+    organisation: str
+    full_name: str = ""
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class InviteRequest(BaseModel):
+    """A colleague, into the SAME organisation as the inviter. There is no route
+    that creates a user in another organisation, deliberately."""
+    email: str
+    password: str
+    full_name: str = ""
+
+
+@app.post("/api/auth/bootstrap", tags=["auth"])
+def bootstrap(req: BootstrapRequest, request: Request, response: Response,
+              db: Session = Depends(get_db)):
+    """Create the first clinician account and organisation.
+
+    Stops working permanently as soon as one user exists. This is the whole of the
+    compromise for having no "disable auth" flag: a fresh install needs some way in,
+    and this one closes behind itself and cannot be reopened by an environment
+    variable.
+    """
+    if not bootstrap_available(db):
+        raise HTTPException(
+            409, "An account already exists. Ask an existing user to invite you.")
+    user = create_user(db, email=req.email, password=req.password,
+                       organisation=req.organisation, full_name=req.full_name)
+
+    # Adopt patients created before authentication existed. They carry no
+    # organisation, so every scoped query already ignores them — safe, but it
+    # means an existing database appears empty after upgrading. Adoption happens
+    # once, only at bootstrap (when by definition there is exactly one
+    # organisation to adopt into), and the count is reported rather than done
+    # quietly.
+    adopted = (db.query(Patient)
+               .filter(Patient.organisation_id.is_(None))
+               .update({"organisation_id": user.organisation_id},
+                       synchronize_session=False))
+    if adopted:
+        db.commit()
+        print(f"[auth] adopted {adopted} pre-auth patient(s) into "
+              f"'{req.organisation}'.")
+
+    set_session_cookie(response, request, create_session(db, user))
+    return {"id": user.id, "email": user.email,
+            "organisation_id": user.organisation_id,
+            "adopted_existing_patients": adopted}
+
+
+@app.post("/api/auth/login", tags=["auth"])
+def login(req: LoginRequest, request: Request, response: Response,
+          db: Session = Depends(get_db)):
+    """Sign in.
+
+    A wrong email and a wrong password return the identical error. Distinguishing
+    them turns the login form into a way to discover which clinicians have accounts
+    here, which is information about staffing at a named hospital.
+    """
+    user = db.query(User).filter(User.email == req.email.strip().lower()).first()
+    if user is None or not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "Email or password is incorrect.")
+    if user.disabled:
+        raise HTTPException(403, "This account is disabled.")
+
+    set_session_cookie(response, request, create_session(db, user))
+    return {"id": user.id, "email": user.email, "full_name": user.full_name,
+            "organisation_id": user.organisation_id}
+
+
+@app.post("/api/auth/logout", tags=["auth"])
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Revoke the session server-side, not just client-side.
+
+    Deleting the cookie alone would leave a valid token in whatever copied it.
+    This is why sessions are a table and not a JWT.
+    """
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        revoke_session(db, token)
+    clear_session_cookie(response)
+    return {"signed_out": True}
+
+
+@app.get("/api/auth/me", tags=["auth"])
+def whoami(user: User = Depends(current_user)):
+    return {"id": user.id, "email": user.email, "full_name": user.full_name,
+            "organisation_id": user.organisation_id,
+            "organisation": user.organisation.name if user.organisation else ""}
+
+
+@app.get("/api/auth/status", tags=["auth"])
+def auth_status(db: Session = Depends(get_db)):
+    """Unauthenticated on purpose, and says almost nothing.
+
+    The frontend needs to know whether to render a login form or a
+    create-first-account form before anyone is signed in. It returns only whether
+    bootstrap is still open — never a user count, never an email, never an
+    organisation name.
+    """
+    return {"bootstrap_available": bootstrap_available(db)}
+
+
+@app.post("/api/auth/invite", tags=["auth"])
+def invite(req: InviteRequest, db: Session = Depends(get_db),
+           user: User = Depends(current_user)):
+    """Add a colleague to the caller's own organisation. No cross-org route exists."""
+    created = create_user(db, email=req.email, password=req.password,
+                          organisation="", full_name=req.full_name,
+                          org_id=user.organisation_id)
+    return {"id": created.id, "email": created.email,
+            "organisation_id": created.organisation_id}
+
+
+@app.get("/api/checkins/{checkin_id}/link", tags=["follow-up"])
+def checkin_link(checkin_id: int, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
+    """The carer's link for this check-in. Clinician-only to issue.
+
+    Minted on demand. The token is the carer's whole credential, so a clinician
+    generating one is an authorised act and is scoped to their organisation.
+    """
+    c = scoped_checkin(checkin_id, user, db)
+    token = access_token_for(db, c)
+    return {"check_in_id": c.id, "token": token,
+            "path": f"/checkin?token={token}"}
 
 
 @app.get("/api/meta/schema", tags=["meta"])
@@ -187,7 +337,8 @@ def ask_guidance(q: GuidanceQuestion):
 
 # --------------------------------------------------------------------------- assess
 def _run_assessment(req: AssessmentRequest, db: Session,
-                    patient: Patient | None = None) -> AssessmentResponse:
+                    patient: Patient | None = None,
+                    user: User | None = None) -> AssessmentResponse:
     """Score, persist, and (re)schedule follow-up.
 
     Shared by both assessment routes. When `patient` is supplied this is a
@@ -219,9 +370,14 @@ def _run_assessment(req: AssessmentRequest, db: Session,
     created = patient is None
     if created:
         patient = Patient(
+            # Stamped at creation from the caller. A patient with no organisation
+            # is invisible to every scoped query rather than visible to all of
+            # them, which is the safe direction for the failure.
+            organisation_id=user.organisation_id if user else None,
             patient_ref=req.patient_ref,
             caregiver_contact=req.caregiver_contact,
             consent_recorded=bool(req.caregiver_contact),
+            language=req.caregiver_language or "en",
         )
         db.add(patient)
         db.flush()
@@ -231,6 +387,8 @@ def _run_assessment(req: AssessmentRequest, db: Session,
         if req.caregiver_contact:
             patient.caregiver_contact = req.caregiver_contact
             patient.consent_recorded = True
+        if req.caregiver_language:
+            patient.language = req.caregiver_language
         for existing in list(patient.check_ins):
             if existing.completed_at is None:
                 db.delete(existing)
@@ -277,38 +435,40 @@ def _run_assessment(req: AssessmentRequest, db: Session,
 
 
 @app.post("/api/assess", response_model=AssessmentResponse, tags=["assessment"])
-def assess(req: AssessmentRequest, db: Session = Depends(get_db)):
+def assess(req: AssessmentRequest, db: Session = Depends(get_db),
+           user: User = Depends(current_user)):
     """Score a patient at discharge.
 
-    If `patient_ref` matches an existing record, this re-assesses that patient
-    rather than creating a duplicate. Without a `patient_ref` there is nothing to
-    match on, so a new record is always created.
+    If `patient_ref` matches an existing record IN THE CALLER'S ORGANISATION, this
+    re-assesses that patient rather than creating a duplicate. The scoping matters:
+    two hospitals both using "ward3-014" must not collide, and matching across
+    organisations would attach one hospital's assessment to another's patient.
     """
     existing = None
     if req.patient_ref:
-        existing = (db.query(Patient)
-                      .filter(Patient.patient_ref == req.patient_ref)
-                      .order_by(Patient.created_at.desc())
-                      .first())
-    return _run_assessment(req, db, patient=existing)
+        existing = (scoped_patients(user, db)
+                    .filter(Patient.patient_ref == req.patient_ref)
+                    .order_by(Patient.created_at.desc())
+                    .first())
+    return _run_assessment(req, db, patient=existing, user=user)
 
 
 @app.post("/api/patients/{patient_id}/assess", response_model=AssessmentResponse,
           tags=["assessment"])
 def reassess(patient_id: int, req: AssessmentRequest,
-             db: Session = Depends(get_db)):
+             db: Session = Depends(get_db),
+             user: User = Depends(current_user)):
     """Re-assess a known patient by id. Use this when the reference is ambiguous
     or absent, so the caller controls exactly which record is updated."""
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(404, "Patient not found")
-    return _run_assessment(req, db, patient=patient)
+    patient = scoped_patient(patient_id, user, db)
+    return _run_assessment(req, db, patient=patient, user=user)
 
 
 # --------------------------------------------------------------------------- patients
 @app.get("/api/patients", response_model=list[PatientSummary], tags=["patients"])
-def list_patients(db: Session = Depends(get_db), limit: int = 100):
-    patients = (db.query(Patient)
+def list_patients(db: Session = Depends(get_db), limit: int = 100,
+                  user: User = Depends(current_user)):
+    patients = (scoped_patients(user, db)
                   .order_by(Patient.created_at.desc())
                   .limit(limit).all())
     now = utcnow()
@@ -418,7 +578,8 @@ def _messaging_state(p: Patient, db: Session, now) -> MessagingState:
 
 @app.get("/api/patients/{patient_id}", response_model=PatientDetail,
          tags=["patients"])
-def get_patient(patient_id: int, db: Session = Depends(get_db)):
+def get_patient(patient_id: int, db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
     """Everything recorded about one patient.
 
     This endpoint existed before and returned an unvalidated dict that no
@@ -429,9 +590,7 @@ def get_patient(patient_id: int, db: Session = Depends(get_db)):
     place a clinician can see that follow-up has silently stopped because
     consent was never recorded or the carer opted out.
     """
-    p = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not p:
-        raise HTTPException(404, "Patient not found")
+    p = scoped_patient(patient_id, user, db)
 
     now = utcnow()
     check_ins = sorted(p.check_ins, key=lambda c: c.scheduled_for or now)
@@ -474,10 +633,9 @@ def get_patient(patient_id: int, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/patients/{patient_id}", tags=["patients"])
-def delete_patient(patient_id: int, db: Session = Depends(get_db)):
-    p = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not p:
-        raise HTTPException(404, "Patient not found")
+def delete_patient(patient_id: int, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    p = scoped_patient(patient_id, user, db)
     db.delete(p)
     db.commit()
     return {"deleted": patient_id}
@@ -485,7 +643,8 @@ def delete_patient(patient_id: int, db: Session = Depends(get_db)):
 
 # --------------------------------------------------------------------------- check-ins
 @app.get("/api/checkins/due", response_model=list[CheckInResponse], tags=["follow-up"])
-def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db)):
+def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
     """Check-ins ready to send. The scheduler (Sprint 5) polls this.
 
     `include_scheduled=true` also returns check-ins whose date has not arrived
@@ -494,7 +653,10 @@ def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db))
     unhelpfully empty for three days. The scheduler must never pass it — sending
     a day-90 check-in on day 1 would be worse than sending none.
     """
-    query = db.query(CheckIn).filter(CheckIn.completed_at.is_(None))
+    query = (db.query(CheckIn)
+             .join(Patient, CheckIn.patient_id == Patient.id)
+             .filter(CheckIn.completed_at.is_(None),
+                     Patient.organisation_id == user.organisation_id))
     if not include_scheduled:
         query = query.filter(CheckIn.scheduled_for <= utcnow())
     rows = query.order_by(CheckIn.scheduled_for).all()
@@ -504,14 +666,33 @@ def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db))
     ) for c in rows]
 
 
+@app.get("/api/checkins/by-token", response_model=CheckInResponse,
+         tags=["follow-up"])
+def checkin_by_token(token: str, db: Session = Depends(get_db)):
+    """The one check-in a carer's link refers to. No session required.
+
+    This is the carer's entire view of the system: one check-in, theirs, and
+    nothing once it is answered. `/api/checkins/due` stays clinician-only —
+    handing a carer a list of every due check-in in the hospital would be the
+    same leak this whole change exists to close.
+    """
+    c = checkin_by_access_token(token, db)
+    return CheckInResponse(
+        id=c.id, patient_id=c.patient_id, scheduled_for=c.scheduled_for,
+        completed_at=c.completed_at, escalated=c.escalated, responses=c.responses)
+
+
 @app.post("/api/checkins/{checkin_id}/respond", tags=["follow-up"])
-def submit_checkin(checkin_id: int, sub: CheckInSubmission,
+def submit_checkin(checkin_id: int, sub: CheckInSubmission, request: Request,
                    db: Session = Depends(get_db)):
     """Caregiver response. Escalation rules are deliberately conservative —
-    a missed escalation costs more than a false alarm."""
-    c = db.query(CheckIn).filter(CheckIn.id == checkin_id).first()
-    if not c:
-        raise HTTPException(404, "Check-in not found")
+    a missed escalation costs more than a false alarm.
+
+    Reachable two ways, both real: a carer holding this check-in's token, or a
+    clinician with a session. The carer's token must match THIS check-in, so
+    holding one for check-in 4 grants nothing about check-in 5.
+    """
+    c = caregiver_or_clinician_checkin(checkin_id, request, db)
 
     # STEP 1 — the boolean rules. These run first, always, and their output is
     # never revisited. Everything below can only add to this list.
@@ -555,7 +736,8 @@ def submit_checkin(checkin_id: int, sub: CheckInSubmission,
 
 
 @app.get("/api/escalations", tags=["follow-up"])
-def escalations(db: Session = Depends(get_db)):
+def escalations(db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
     """Clinician inbox.
 
     Returns the triage record alongside the flag so a clinician can see WHY it
@@ -564,7 +746,9 @@ def escalations(db: Session = Depends(get_db)):
     learn to ignore.
     """
     rows = (db.query(CheckIn)
-              .filter(CheckIn.escalated.is_(True))
+              .join(Patient, CheckIn.patient_id == Patient.id)
+              .filter(CheckIn.escalated.is_(True),
+                      Patient.organisation_id == user.organisation_id)
               .order_by(CheckIn.completed_at.desc()).all())
     return [{
         "check_in_id": c.id,

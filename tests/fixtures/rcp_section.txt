@@ -42,6 +42,34 @@ C
 
 People with ischaemic stroke or TIA in sinus rhythm should not receive anticoagulation unless there is another indication. **[2023]**
 
+### 2.5 Resources – inpatient stroke services
+
+Recommendations
+
+N
+
+Specialist inpatient stroke services should include sufficient administration and management (including data management) support. **[2023]**
+
+Sources, evidence to recommendations, implications
+
+Sources
+
+A, B
+
+Follows from the evidence on organised stroke unit care and from the working party's consensus.
+
+### 2.3 Transfer to acute stroke services
+
+Recommendations
+
+F
+
+Ambulance services should transfer people with suspected acute stroke to a hyperacute stroke unit. **[2023]**
+
+Sources, evidence to recommendations, implications
+
+Guidance concerning emergency diagnosis and treatment of stroke ( Section 3.4 Diagnosis and treatment of acute stroke – imaging , Section 3.5 Management of ischaemic stroke , Section 3.6 Management of intracerebral haemorrhage , Section 3.7 Management of subarachnoid haemorrhage )
+
 ### 4.23.1 Neuropathic pain (central post-stroke pain)
 
 Central post-stroke pain is a neuropathic pain syndrome...Show more

@@ -1,6 +1,6 @@
 # RecoveryLens — status
 
-273 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
+383 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
 
 **Last verified:** 9 Aug 2026 — full 13-step walkthrough (`docs/WALKTHROUGH.md`)
 run from an empty database. Steps 1–10 confirmed live, including a real WhatsApp
@@ -103,7 +103,7 @@ an irrelevance, and the probe label was re-verified rather than assumed.
 answer to a legitimate question, now unreachable without embeddings. Recorded in
 `test_tfidf_only_mode_is_measurably_weaker_now`, which fails if it ever becomes
 retrievable again. Embeddings were an optional improvement at 291 passages; at
-803 they are load-bearing.
+774 they are load-bearing.
 
 **29 of 35 curated entries were duplicated by ingested chunks.** Ingestion
 re-reads the documents a human already read, so the index held two copies of
@@ -136,12 +136,12 @@ error, not an irrelevance.
 
 The policy changed with the numbers, though. At 291 passages the band was wide
 (0.28–0.42) and the floor sat *below* the adjacent cluster, answering those
-questions with a hedge. At 803 the adjacent cluster rose far enough that a floor
+questions with a hedge. At 774 the adjacent cluster rose far enough that a floor
 below it would answer *"how do I manage a myocardial infarction?"*, so the floor
-now sits **above** every out-of-scope question (0.402) and the band above it
-(0.402–0.44) is narrower and exists to hedge the 0.010 margin rather than to
-rescue on-topic questions. Truly unrelated questions (meningitis 0.180, France
-0.075) refuse by a wide margin either way.
+now sits **above** every out-of-scope question (0.405) and the band above it
+(0.405–0.44) exists to hedge the 0.026 margin rather than to rescue on-topic
+questions. Truly unrelated questions (meningitis 0.180, France 0.075) refuse by a
+wide margin either way.
 
 **Agent-driven topic selection** — reads all 8 deficits (the old if/else read 4),
 risk tiers and SHAP drivers, selects topics with a per-patient rationale.
@@ -210,7 +210,129 @@ check-in history and the risk profile:
 - STOP is permanent and outranks consent.
 - Webhook with Twilio signature validation (confirmed rejecting unsigned requests).
 
-### Voice (inbound)
+### Outbound voice — audio attached to the check-in
+`api/media.py`. Needs `RECOVERYLENS_PUBLIC_URL` (Twilio fetches the audio from its
+own servers, so this must be internet-reachable — ngrok locally, same as the
+webhook) plus `RECOVERYLENS_VOICE`.
+
+**`/media/{token}` is the only route that reads data without a session**, and it
+has to be: Twilio cannot hold a cookie. A deliberate hole in the boundary built
+one commit earlier, so it is made as narrow as a hole can be:
+
+| | |
+|---|---|
+| Credential | a 256-bit `token_urlsafe`, and nothing else. No enumerable id, no listing route |
+| Expiry | **15 minutes.** Twilio fetches within seconds; a longer window exists only for whoever finds the URL later |
+| Content | the **patient reference is stripped before synthesis** — a leaked URL yields generic post-stroke guidance, not guidance about a named person |
+| Caching | `no-store`, `noindex`, `nosniff`, generic filename |
+| Probing | unknown, expired and purged tokens return an identical 404 |
+
+That third row is the mitigation that still holds after the other three have
+failed, and it is the one worth pointing at. Text goes to a consented number;
+audio goes to whoever holds a link.
+
+**Audio is an enhancement and never a gate.** No public URL, voice off, synthesis
+failed, nothing left to speak — every path returns text-only with a stated reason
+recorded in `triage["outbound_audio"]`. A check-in that reaches a family as text
+is a success; one that does not reach them because a tunnel was misconfigured is
+not.
+
+`spoken_text()` also removes "Reply STOP" and the numbered list, because read
+aloud they are nonsense — you cannot reply STOP to audio, and "1. 2. 3." spoken as
+digits tells a listener nothing. The text message still carries all of it.
+
+Expired audio is **deleted**, not merely unreachable: the scheduler purges every
+10 minutes. For a recording about a stroke patient's care, "the URL 404s" and "the
+bytes are gone" are not the same guarantee.
+
+**A guard test was giving false comfort.** `test_every_patient_route_is_in_the_protected_list`
+walks the live route table so a new unprotected endpoint fails the suite — but
+`app.routes` does not contain routes from included routers flat (this FastAPI
+version wraps them in `_IncludedRouter`), so it had been checking only `main.py`
+and skipping the **entire webhook and voice surface** — the routes least likely to
+be noticed, because no browser calls them. `iter_api_routes` in `conftest.py` now
+descends properly, and asserts it examined more than ten routes so it cannot
+silently shrink back.
+
+### Multilingual caregiver messages (Tamil, Hindi)
+`guidance/translate.py`. Off unless `RECOVERYLENS_TRANSLATE=1`; language is per
+patient (`Patient.language`, set from the assessment form).
+
+**Quoted guideline text is never translated.** A translated NICE recommendation is
+our paraphrase wearing NICE's citation — worse than an uncited paraphrase, because
+the citation invites trust the text no longer earns. Enforced structurally:
+`translate()` requires `provenance="generated"` and raises on anything else, the
+same pattern as `embeddings.embed_texts(input_type=...)`. Not even `"GENERATED"`
+passes; a near-miss that silently worked would defeat the guard for whoever typed
+it.
+
+**Back-translation is checked, but not with a similarity score.** General
+similarity is reassuring and blind to the only two failures that matter:
+
+| original | round trip | any similarity score |
+|---|---|---|
+| "take it for **14** days" | "take it for **4** days" | ~0.99 |
+| "do **not** stop the tablets" | "stop the tablets" | ~0.9 |
+
+Both are fatal. So the guards are specific and objective: every number present
+before must be present after, and the negation count must not fall. Same reasoning
+as `_strip_refs` in `ingest.py`, which abandons a footnote strip rather than risk
+turning 4.5 hours into 4 hours. An *added* negation is not flagged — "avoid
+stairs" returning as "do not use the stairs" is correct, and flagging it would
+train everyone to ignore warnings.
+
+**A flagged translation is never sent.** On drift, provider failure, or a missing
+key the English original goes out and the reason is recorded in
+`triage["outbound_language"]`, so "this patient's language is Tamil but the
+message went in English" is discoverable without re-running the send. An
+unreadable message is a delivery problem a clinician can see; a fluent
+mistranslation of *"call your doctor if she becomes drowsy"* is a clinical one
+nobody sees until it matters.
+
+The whole check-in message is translated as one unit rather than phrase by phrase
+— word order differs enough between English and Tamil that stitching translated
+fragments together reliably produces something grammatical in neither. Clinician
+text stays English throughout. 33 tests.
+
+### Voice — now visible in the browser
+Voice had no user interface of any kind. It was reachable only by sending audio to
+a Twilio number, so it could not be shown, tried, or noticed, and looked like
+unfinished work for weeks because there was nothing to click.
+
+`POST /api/checkins/{id}/voice` accepts a `MediaRecorder` blob and returns the
+read-back; `POST /api/checkins/{id}/voice/confirm` accepts or rejects it. Both call
+**the same `record_voice_note`** the Twilio webhook calls — extracted for exactly
+that reason. Every safety property of the voice path lives in one function, because
+a second implementation for the browser would be a second place for them to be
+wrong, and the browser is the path that gets demonstrated.
+
+Four properties hold identically on both paths, each with tests:
+- **Nothing is recorded until confirmed.** The transcript is parked in
+  `triage["pending_voice"]`, never written to `responses`. There is no confidence
+  score high enough to skip the read-back — a fluent mis-transcription scores
+  *well*, precisely because it is fluent.
+- **Low confidence is not interpreted.** Below `MIN_CONFIDENCE` the carer is asked
+  again rather than having half-heard clinical meaning guessed at.
+- **Negation-loss warnings reach the read-back**, with the reason stated on screen:
+  recognition drops "not" and "can't" more readily than anything else, and that
+  error runs in the reassuring direction, which is the one direction nothing
+  downstream catches.
+- **Abandoning the page escalates.** Closing the tab behaves exactly like ignoring
+  the WhatsApp read-back — `escalate_unconfirmed_voice` does not know or care which
+  path parked the transcript.
+
+A confirmed transcript is appended to the free-text box rather than submitted
+separately, so `/respond` stays the only way to answer a check-in and the triage
+agent reads spoken and typed notes identically. The carer can also edit it, which
+is the point of putting it somewhere visible.
+
+Audio is posted as a raw request body, not multipart — `UploadFile` needs
+python-multipart, which this app deliberately does not install. Recordings are not
+retained (no audio hosting yet), and `audio_ref` says so in words so a clinician
+reviewing an unconfirmed browser transcript is not left hunting for a link that
+was never created.
+
+### Voice (inbound, WhatsApp)
 - Voice note → transcribe → **read back** → confirm → only then recorded.
 - Low ASR confidence escalates rather than being interpreted.
 - **Negation-loss detection** — "he can't move his arm" transcribing as "he can
@@ -295,6 +417,17 @@ from sleep does not fire a backlog of missed runs at once.
       NG128 64, CG76 42, **RCP 512**. Floors re-measured, see above.
 - [x] ~~Re-measure the floors~~ — done. Clean separation at 774 passages,
       `EMBED_FLOOR = 0.405`, **0 of 25 probe questions refused**.
+- [ ] **Re-ingest, re-embed, re-measure** — the RCP parser now stops at the
+      apparatus block and drops cross-reference lists, so chunk counts will fall:
+
+          python -m guidance.ingest
+          python -m guidance.embeddings
+          python -m guidance.tune_floor
+
+      94 of 512 RCP chunks (18%) had "Sources, evidence to recommendations,
+      implications" absorbed into them, and some consisted of nothing but links to
+      other sections. Fewer, cleaner chunks will shift the score distribution, so
+      the floors need re-measuring once more.
 - [ ] **ISA never ingested** — `stroke-india.org` returns 403 to a programmatic
       request; it serves the PDF to a browser and refuses an unrecognised client.
       Rather than disguise the request, ingestion now looks on disk first:
@@ -323,13 +456,13 @@ from sleep does not fire a backlog of missed runs at once.
       clinician prompt, or retire it. Options documented in `corpus.json`.
 
 ### Build remaining
-- [ ] **Outbound voice (TTS).** `synthesise()` produces audio; nothing sends it.
-      Twilio media messages need a publicly reachable URL, so this needs real
-      hosting. Deliberately not half-built.
-- [ ] **Translation (Tamil/Hindi).** Built English-only so translation quality
-      could not mask voice bugs. Needs: translate the generated caregiver
-      messages only (never quoted guideline text), a back-translation check, and
-      a language field on `Patient`.
+- [x] ~~Outbound voice (TTS)~~ — built. `api/media.py`, 26 tests. Set
+      `RECOVERYLENS_PUBLIC_URL` to your ngrok or deployed URL, plus
+      `RECOVERYLENS_VOICE`. Without them the send is text-only and says so.
+- [x] ~~Translation (Tamil/Hindi)~~ — built. `guidance/translate.py`, 33 tests,
+      documented in the guidance section above. Switch on with
+      `RECOVERYLENS_TRANSLATE=1` and set the carer's language on the assessment
+      form.
 - [x] ~~Scheduler~~ — built, 17 tests, documented above.
 - [ ] **Deployment.** `render.yaml` exists but has never been deployed. Note the
       free tier sleeps after 15 minutes — warm it before presenting. Deliberately
@@ -337,6 +470,9 @@ from sleep does not fire a backlog of missed runs at once.
       target is wasted effort.
 
 ### Known limitations worth stating rather than hiding
+- **WhatsApp constraints are written up in `docs/WHATSAPP_REALITY.md`** — one page
+  covering what has actually run, the two constraints that are Meta's rather than
+  ours, and the slide text. Summary below.
 - **WhatsApp 24-hour window — verified, not assumed.** Free-form messages are
   only permitted within 24h of the carer's last message. Outside it Twilio
   returns `[21654] ContentSid Required`: a pre-approved template is mandatory.
@@ -346,9 +482,11 @@ from sleep does not fire a backlog of missed runs at once.
   which is precisely why you are messaging them — so production needs
   Meta-approved templates for the outbound prompt. The carer's reply then opens
   a window and everything downstream works free-form as built.
-- **Voice is built and tested but not switched on in your `.env`.** `RECOVERYLENS_VOICE`
-  is unset, so `NullSpeech` is active and voice notes are not transcribed. Set it
-  before demonstrating that feature.
+- **Voice needs `RECOVERYLENS_VOICE=openai` to do anything.** Unset, `NullSpeech`
+  is active: recordings upload and come back unusable. The browser UI now says so
+  explicitly rather than telling the carer to speak more clearly — that would be a
+  lie about a feature that was never switched on, and it is the confusion that hid
+  this whole feature in the first place.
 - **Voice is English-only.** Accuracy falls hardest on code-switched speech —
   English clinical terms inside Tamil or Hindi — which is what Indian carers
   actually use.
