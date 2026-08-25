@@ -18,6 +18,7 @@ import type {
   DeficitState,
 } from "../lib/api";
 import { api } from "../lib/api";
+import DischargeSummaryImport from "./DischargeSummaryImport";
 
 const DEFICITS: { key: keyof AssessmentRequest; label: string }[] = [
   { key: "deficit_face", label: "Facial weakness" },
@@ -107,8 +108,38 @@ export default function AssessmentForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fields a model filled in that the clinician has not touched yet, and the
+  // sentence each came from. A field leaves this set the moment it is edited —
+  // editing IS reviewing, so re-marking it would be nagging.
+  const [machineFilled, setMachineFilled] =
+    useState<Record<string, string>>({});
+
   function set<K extends keyof AssessmentRequest>(key: K, value: AssessmentRequest[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+    setMachineFilled((m) => {
+      if (!(key in m)) return m;
+      const next = { ...m };
+      delete next[key as string];
+      return next;
+    });
+  }
+
+  /** Marks a field the clinician still needs to look at, and carries the quote
+   *  as a tooltip. Extraction is the first place a model writes into a CLINICAL
+   *  INPUT rather than a display surface — everything downstream is computed
+   *  from these values — so an unreviewed one must not look like a typed one. */
+  function extractedProps(key: keyof AssessmentRequest) {
+    const source = machineFilled[key as string];
+    // ALWAYS returns className. Returning {} when a field is not extracted left
+    // the input with no class at all and stripped its styling — this helper
+    // replaces the className rather than adding to it.
+    return {
+      className: source ? "field-input ring-1 ring-amber/50" : "field-input",
+      ...(source
+        ? { "data-extracted": "true",
+            title: `Read from the summary: "${source}"` }
+        : {}),
+    };
   }
 
   async function submit(e: React.FormEvent) {
@@ -118,7 +149,7 @@ export default function AssessmentForm({
     try {
       const payload = {
         ...form,
-        patient_ref: form.patient_ref || null,
+        patient_ref: (form.patient_ref ?? "").trim(),
         caregiver_contact: form.caregiver_contact || null,
         caregiver_language: form.caregiver_language || "en",
       };
@@ -132,31 +163,63 @@ export default function AssessmentForm({
 
   return (
     <form onSubmit={submit} className="space-y-5">
+      <DischargeSummaryImport
+        onExtracted={(values, result) => {
+          setForm((f) => ({ ...f, ...values }));
+          setMachineFilled(
+            Object.fromEntries(result.fields.map((x) => [x.name, x.source])));
+        }}
+      />
+
+      {Object.keys(machineFilled).length > 0 && (
+        <div className="card border border-amber/40 p-3">
+          <p className="text-sm text-amber">
+            {Object.keys(machineFilled).length} field
+            {Object.keys(machineFilled).length === 1 ? "" : "s"} filled from the
+            summary and not yet checked.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            They are outlined below — hover any one to see the sentence it came
+            from. Editing a field marks it as checked. Nothing is submitted until
+            you press the button at the bottom.
+          </p>
+        </div>
+      )}
+
       <Section title="Patient">
         <div>
-          <label className="field-label" htmlFor="ref">Reference (optional)</label>
+          <label className="field-label" htmlFor="ref">Patient reference</label>
           <input
             id="ref"
             className="field-input"
             placeholder="e.g. ward3-014"
             value={form.patient_ref ?? ""}
             onChange={(e) => set("patient_ref", e.target.value)}
+            required
+            maxLength={64}
           />
-          <p className="mt-1 text-xs text-muted">Never enter a patient name.</p>
+          {/* Required, because this is how the patient appears in every list, every
+              escalation and every carer link. An unlabelled patient is one a
+              clinician cannot act on. Still not a real name — see below. */}
+          <p className="mt-1 text-xs text-muted">
+            How this patient appears everywhere in the app. A ward reference or
+            study number — <strong className="text-amber/90">not a real
+            name</strong>, since this database holds no clinical governance.
+          </p>
         </div>
         <div>
           <label className="field-label" htmlFor="age">Age (years)</label>
           <input
             id="age" type="number" min={16} max={110} required
-            className="field-input"
             value={form.age}
+            {...extractedProps("age")}
             onChange={(e) => set("age", Number(e.target.value))}
           />
         </div>
         <div>
           <label className="field-label" htmlFor="sex">Sex</label>
           <select
-            id="sex" className="field-input" value={form.sex}
+            id="sex" value={form.sex} {...extractedProps("sex")}
             onChange={(e) => set("sex", e.target.value as AssessmentRequest["sex"])}
           >
             <option value="F">Female</option>
@@ -170,15 +233,16 @@ export default function AssessmentForm({
           <label className="field-label" htmlFor="onset">Hours since onset</label>
           <input
             id="onset" type="number" min={0} max={48} step={0.5} required
-            className="field-input"
             value={form.hours_since_onset}
+            {...extractedProps("hours_since_onset")}
             onChange={(e) => set("hours_since_onset", Number(e.target.value))}
           />
         </div>
         <div>
           <label className="field-label" htmlFor="consc">Level of consciousness</label>
           <select
-            id="consc" className="field-input" value={form.consciousness}
+            id="consc" value={form.consciousness}
+            {...extractedProps("consciousness")}
             onChange={(e) => set("consciousness", e.target.value as AssessmentRequest["consciousness"])}
           >
             <option value="alert">Fully alert</option>
@@ -190,15 +254,16 @@ export default function AssessmentForm({
           <label className="field-label" htmlFor="sbp">Systolic BP (mmHg)</label>
           <input
             id="sbp" type="number" min={60} max={300} required
-            className="field-input"
             value={form.systolic_bp}
+            {...extractedProps("systolic_bp")}
             onChange={(e) => set("systolic_bp", Number(e.target.value))}
           />
         </div>
         <div>
           <label className="field-label" htmlFor="stype">Stroke subtype (Bamford)</label>
           <select
-            id="stype" className="field-input" value={form.stroke_subtype}
+            id="stype" value={form.stroke_subtype}
+            {...extractedProps("stroke_subtype")}
             onChange={(e) => set("stroke_subtype", e.target.value as AssessmentRequest["stroke_subtype"])}
           >
             <option value="TACS">TACS — total anterior</option>

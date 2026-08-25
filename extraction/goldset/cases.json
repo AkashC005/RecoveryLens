@@ -1,0 +1,143 @@
+{
+  "_note": [
+    "Gold set for measuring extraction accuracy.",
+    "",
+    "Synthetic summaries written to look like real Indian discharge summaries:",
+    "terse, abbreviation-heavy, inconsistent headings, and with the deficits",
+    "described in prose rather than as a checklist. That prose is the hard part",
+    "and the reason per-field accuracy is reported rather than one number.",
+    "",
+    "`expected` holds ONLY fields a careful human would fill from that text. A",
+    "field absent here must come back BLANK - extracting it is a false positive",
+    "even if the value happens to be clinically plausible.",
+    "",
+    "-- ON REVISING THIS FILE AFTER SEEING MODEL OUTPUT --",
+    "",
+    "Adjusting a gold set to match what the model produced is how an evaluation",
+    "quietly becomes meaningless. It happened once here, legitimately, and the",
+    "rule that made it legitimate is recorded so it can be applied again:",
+    "",
+    "  A label may only be added if the SUMMARY TEXT supports it, and the",
+    "  supporting sentence is written into `_justification` below. If the",
+    "  justification cannot be written without appealing to what the model said,",
+    "  the label does not go in.",
+    "",
+    "The first run scored 61/61 correct with 6 'spurious' extractions. On",
+    "inspection all six were supported by sentences I had failed to label -",
+    "the evaluation found errors in the gold set, not in the model. Each is",
+    "justified below."
+  ],
+  "cases": [
+    {
+      "id": "typical-pacs",
+      "text": "DISCHARGE SUMMARY\nWard 3B\n\n74/F admitted with sudden onset right sided weakness. Symptoms began 08:00, reached casualty 14:30.\nOn arrival GCS 13, drowsy but rousable. BP 172/94 mmHg, PR 96 irregular.\n\nO/E: Right upper limb power 3/5. Expressive dysphasia present. No facial asymmetry.\nVisual fields could not be assessed due to drowsiness.\n\nECG: atrial fibrillation.\nNCCT head done prior to treatment - established left MCA territory infarct.\nClassified as PACS.\n\nDischarged on T. Aspirin 150mg OD. Received prophylactic dose enoxaparin during stay.\nDaughter is primary carer, contact 9876543210.",
+      "expected": {
+        "age": 74,
+        "sex": "F",
+        "hours_since_onset": 6.5,
+        "consciousness": "drowsy",
+        "systolic_bp": 172,
+        "stroke_subtype": "PACS",
+        "deficit_arm": "present",
+        "deficit_speech": "present",
+        "deficit_face": "absent",
+        "deficit_visual_field": "cannot_assess",
+        "atrial_fibrillation": "yes",
+        "ct_before_treatment": true,
+        "infarct_visible_on_ct": true,
+        "planned_aspirin": true,
+        "planned_heparin": "low",
+        "caregiver_contact": "9876543210"
+      },
+      "_justification": {
+        "caregiver_contact": "'Daughter is primary carer, contact 9876543210.' - stated outright; my omission."
+      }
+    },
+    {
+      "id": "lacs-alert-sinus",
+      "text": "Discharge Summary\n\n58 year old gentleman, known hypertensive, presented 3 hours after onset of left leg weakness noted on waking.\nFully conscious throughout, GCS 15. Admission BP 148/88.\n\nExamination: isolated left lower limb weakness 4/5. Speech normal. No visual field defect. No neglect.\nCardiac: regular rhythm, sinus on ECG.\n\nMRI brain: right lacunar infarct in corona radiata. Imaging done before starting treatment.\nLACS.\n\nPlan: aspirin 75mg daily on discharge. No heparin given.",
+      "expected": {
+        "age": 58,
+        "sex": "M",
+        "hours_since_onset": 3,
+        "symptoms_on_waking": true,
+        "consciousness": "alert",
+        "systolic_bp": 148,
+        "stroke_subtype": "LACS",
+        "deficit_leg": "present",
+        "deficit_speech": "absent",
+        "deficit_visual_field": "absent",
+        "deficit_visuospatial": "absent",
+        "atrial_fibrillation": "no",
+        "ct_before_treatment": true,
+        "infarct_visible_on_ct": true,
+        "planned_aspirin": true,
+        "planned_heparin": "none",
+        "deficit_arm": "absent"
+      },
+      "_justification": {
+        "deficit_arm": "'isolated left lower limb weakness 4/5' - 'isolated' excludes the other limbs. Reading the meaning of a word is comprehension, not inference from what is typical."
+      }
+    },
+    {
+      "id": "sparse-summary",
+      "text": "SUMMARY OF ADMISSION\n\n67 year old female. Stroke.\nBP on admission 160 systolic.\nRight arm weak.\nFor physiotherapy follow up.",
+      "expected": {
+        "age": 67,
+        "sex": "F",
+        "systolic_bp": 160,
+        "deficit_arm": "present"
+      }
+    },
+    {
+      "id": "tacs-unconscious",
+      "text": "DISCHARGE NOTE\n\n81 yr old lady. Brought in 2 hours after collapse witnessed at home.\nGCS 7 on arrival, intubated. BP 195/105.\n\nDense left hemiplegia involving face, arm and leg. Gaze deviation to the right.\nFields and higher functions not testable given conscious level.\n\nCT: large right MCA infarct with early swelling. Scan performed on arrival before any treatment.\nTACS.\n\nNo antiplatelet started given infarct size. Prophylactic LMWH held.",
+      "expected": {
+        "age": 81,
+        "sex": "F",
+        "hours_since_onset": 2,
+        "consciousness": "unconscious",
+        "systolic_bp": 195,
+        "stroke_subtype": "TACS",
+        "deficit_face": "present",
+        "deficit_arm": "present",
+        "deficit_leg": "present",
+        "deficit_visual_field": "cannot_assess",
+        "ct_before_treatment": true,
+        "infarct_visible_on_ct": true,
+        "planned_aspirin": false,
+        "planned_heparin": "none",
+        "deficit_other": "present",
+        "deficit_visuospatial": "cannot_assess"
+      },
+      "_justification": {
+        "deficit_other": "'Gaze deviation to the right.' - a focal deficit belonging to none of the named categories, which is exactly what deficit_other is for.",
+        "deficit_visuospatial": "'Fields and higher functions not testable given conscious level.' - visuospatial function is a higher function, and 'not testable' is cannot_assess rather than absent."
+      }
+    },
+    {
+      "id": "no-subtype-given",
+      "text": "Discharge summary\n\n70/M. Presented 5 hours from onset with slurred speech and unsteadiness.\nAlert, GCS 15. BP 138/82.\n\nDysarthria present. Ataxia of the left limbs, diplopia on lateral gaze.\nPower preserved in all four limbs. No facial weakness.\n\nCT head normal at presentation. Done before treatment.\nRhythm: sinus.\n\nStarted on aspirin.",
+      "expected": {
+        "age": 70,
+        "sex": "M",
+        "hours_since_onset": 5,
+        "consciousness": "alert",
+        "systolic_bp": 138,
+        "deficit_speech": "present",
+        "deficit_brainstem": "present",
+        "deficit_face": "absent",
+        "atrial_fibrillation": "no",
+        "ct_before_treatment": true,
+        "infarct_visible_on_ct": false,
+        "planned_aspirin": true,
+        "deficit_arm": "absent",
+        "deficit_leg": "absent"
+      },
+      "_justification": {
+        "deficit_arm": "'Power preserved in all four limbs.' - explicit statement that the arms were examined and normal.",
+        "deficit_leg": "'Power preserved in all four limbs.' - same sentence covers the legs."
+      }
+    }
+  ]
+}

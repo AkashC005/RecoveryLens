@@ -50,9 +50,10 @@ def db():
         session.close()
 
 
-def _bootstrap(client, email="lead@hospital-a.test", org="Hospital A"):
-    r = client.post("/api/auth/bootstrap", json={
-        "email": email, "password": GOOD_PASSWORD, "organisation": org})
+def _signup(client, email="lead@hospital-a.test", org="Hospital A", code=""):
+    r = client.post("/api/auth/signup", json={
+        "email": email, "password": GOOD_PASSWORD, "organisation": org,
+        "code": code})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -108,33 +109,78 @@ def _make_patient(client, ref="ward3-014", checkins=2):
 
 
 # ------------------------------------------------------------------- bootstrap
-def test_bootstrap_creates_the_first_account_and_signs_in(client):
-    body = _bootstrap(client)
+def test_signup_creates_an_account_and_signs_in(client):
+    body = _signup(client)
     assert body["organisation_id"]
     assert client.get("/api/auth/me").status_code == 200
 
 
-def test_bootstrap_closes_permanently_once_an_account_exists(client):
-    """The whole compromise for having no "disable auth" flag. It must not be
-    reopenable — not by an env var, not by deleting a cookie."""
-    _bootstrap(client)
-    r = client.post("/api/auth/bootstrap", json={
-        "email": "second@hospital-a.test", "password": GOOD_PASSWORD,
-        "organisation": "Sneaky Ltd"})
-    assert r.status_code == 409
-    assert client.get("/api/auth/status").json()["bootstrap_available"] is False
+def test_anyone_can_register_not_just_the_first_person(client):
+    """The bug this replaced: exactly ONE account could ever exist.
+
+    Anyone handed the app saw a password box with no way to obtain a password. A
+    login form that offers no route to obtaining a login is not a security
+    measure — it is a dead end that looks like one.
+    """
+    _signup(client)
+
+    from api.main import app
+    second = TestClient(app)
+    r = second.post("/api/auth/signup", json={
+        "email": "reviewer@hospital-b.test", "password": GOOD_PASSWORD,
+        "organisation": "Reviewer"})
+    assert r.status_code == 200, r.text
+    assert second.get("/api/auth/me").status_code == 200
 
 
 def test_auth_status_leaks_nothing(client):
-    """The frontend needs to know which form to render before anyone is signed
-    in. That is all it may learn — no user count, no email, no org name."""
+    """The sign-in screen needs two facts before anyone signs in: whether to
+    offer registration, and whether to show a code field. That is all it may
+    learn — no user count, no email, no organisation name. An unauthenticated
+    endpoint that names the hospital using the software has told a stranger
+    something they should have had to earn."""
     body = client.get("/api/auth/status").json()
-    assert set(body) == {"bootstrap_available"}
-    assert body["bootstrap_available"] is True
+    assert set(body) == {"signup_open", "signup_code_required"}
+    assert body["signup_open"] is True
+
+
+def test_a_registration_code_gates_signup_when_set(client, monkeypatch):
+    """Off by default, because a reviewer must be able to register unaided. This
+    exists for the moment a public deployment makes open registration a problem.
+    Named honestly as a speed bump: it stops casual signups, not anyone
+    determined."""
+    monkeypatch.setenv("RECOVERYLENS_SIGNUP_CODE", "stroke-2026")
+
+    assert client.get("/api/auth/status").json()["signup_code_required"] is True
+
+    refused = client.post("/api/auth/signup", json={
+        "email": "a@b.test", "password": GOOD_PASSWORD, "organisation": "X"})
+    assert refused.status_code == 403
+
+    wrong = client.post("/api/auth/signup", json={
+        "email": "a@b.test", "password": GOOD_PASSWORD, "organisation": "X",
+        "code": "guess"})
+    assert wrong.status_code == 403
+    assert wrong.json()["detail"] == refused.json()["detail"], \
+        "a wrong code and a missing code must be indistinguishable"
+
+    ok = client.post("/api/auth/signup", json={
+        "email": "a@b.test", "password": GOOD_PASSWORD, "organisation": "X",
+        "code": "stroke-2026"})
+    assert ok.status_code == 200
+
+
+def test_the_same_email_cannot_register_twice(client):
+    _signup(client)
+    from api.main import app
+    again = TestClient(app).post("/api/auth/signup", json={
+        "email": "lead@hospital-a.test", "password": GOOD_PASSWORD,
+        "organisation": "Impostor"})
+    assert again.status_code == 409
 
 
 def test_short_passwords_are_refused(client):
-    r = client.post("/api/auth/bootstrap", json={
+    r = client.post("/api/auth/signup", json={
         "email": "a@b.test", "password": "x" * (MIN_PASSWORD_LENGTH - 1),
         "organisation": "X"})
     assert r.status_code == 400
@@ -144,7 +190,7 @@ def test_short_passwords_are_refused(client):
 def test_wrong_email_and_wrong_password_are_indistinguishable(client):
     """Distinguishing them turns the login form into a way to discover which
     clinicians have accounts at a named hospital."""
-    _bootstrap(client)
+    _signup(client)
     from api.main import app
 
     fresh = TestClient(app)
@@ -160,7 +206,7 @@ def test_wrong_email_and_wrong_password_are_indistinguishable(client):
 def test_password_is_not_stored_in_plaintext(client, db):
     from api.database import User
 
-    _bootstrap(client)
+    _signup(client)
     user = db.query(User).first()
     assert GOOD_PASSWORD not in user.password_hash
     assert user.password_hash.startswith("scrypt$")
@@ -169,7 +215,7 @@ def test_password_is_not_stored_in_plaintext(client, db):
 def test_logout_revokes_server_side_not_just_the_cookie(client):
     """Deleting the cookie alone would leave a valid token in anything that copied
     it. This is the reason sessions are a table and not a JWT."""
-    _bootstrap(client)
+    _signup(client)
     token = client.cookies.get("rl_session")
     assert token
 
@@ -219,7 +265,7 @@ def test_every_patient_route_is_in_the_protected_list(client):
     from api.main import app
 
     allowed_open = {
-        "/health", "/api/auth/status", "/api/auth/login", "/api/auth/bootstrap",
+        "/health", "/api/auth/status", "/api/auth/login", "/api/auth/signup",
         "/api/auth/logout",
         # Signature-validated instead of session-authenticated. Twilio cannot
         # hold a cookie; it signs every request and we verify it.
@@ -275,7 +321,7 @@ def test_every_patient_route_is_in_the_protected_list(client):
 
 # --------------------------------------------------------- org scoping is real
 def test_a_clinician_cannot_see_another_organisations_patients(client, db):
-    _bootstrap(client)
+    _signup(client)
     _make_patient(client)
     assert len(client.get("/api/patients").json()) == 1
 
@@ -287,7 +333,7 @@ def test_cross_org_access_returns_404_not_403(client, db):
     """A 403 would confirm the patient exists elsewhere — an existence oracle an
     attacker could use to enumerate ids and learn which hospital holds which
     record. "Not yours" and "not there" must be the same answer."""
-    _bootstrap(client)
+    _signup(client)
     pid = _make_patient(client)["patient_id"]
 
     other = _second_org_client(TestClient, db)
@@ -305,7 +351,7 @@ def test_the_same_patient_ref_in_two_orgs_does_not_collide(client, db):
     from api.auth import scoped_patients
     from api.database import Patient, SessionLocal, User
 
-    _bootstrap(client)
+    _signup(client)
     mine = _make_patient(client, ref="ward3-014")["patient_id"]
 
     other = _second_org_client(TestClient, db)
@@ -324,7 +370,7 @@ def test_the_same_patient_ref_in_two_orgs_does_not_collide(client, db):
 
 
 def test_escalations_and_due_checkins_are_scoped(client, db):
-    _bootstrap(client)
+    _signup(client)
     _make_patient(client)
     assert len(client.get("/api/checkins/due?include_scheduled=true").json()) > 0
 
@@ -335,7 +381,7 @@ def test_escalations_and_due_checkins_are_scoped(client, db):
 
 def test_invite_cannot_place_a_user_in_another_organisation(client, db):
     """There is no route that does this. The test records the absence."""
-    _bootstrap(client)
+    _signup(client)
     r = client.post("/api/auth/invite", json={
         "email": "colleague@hospital-a.test", "password": GOOD_PASSWORD})
     assert r.status_code == 200
@@ -343,9 +389,52 @@ def test_invite_cannot_place_a_user_in_another_organisation(client, db):
         "/api/auth/me").json()["organisation_id"]
 
 
+def test_two_people_who_sign_up_cannot_see_each_others_patients(client, db):
+    """The privacy claim the sign-in screen makes, tested through the exact path a
+    reviewer would take: two strangers each register themselves.
+
+    The other scoping tests build the second organisation directly, because no API
+    route creates a user in someone else's org. This one goes through `/signup`
+    twice, which is what actually happens when you hand the app to a reviewer and
+    a judge and each makes an account.
+    """
+    from api.main import app
+
+    _signup(client, email="akash@test.local", org="Akash")
+    mine = _make_patient(client, ref="my-patient")["patient_id"]
+
+    reviewer = TestClient(app)
+    reviewer.post("/api/auth/signup", json={
+        "email": "reviewer@test.local", "password": GOOD_PASSWORD,
+        "organisation": "Reviewer"})
+    theirs = _make_patient(reviewer, ref="their-patient")["patient_id"]
+
+    assert [p["patient_ref"] for p in client.get("/api/patients").json()] \
+        == ["my-patient"]
+    assert [p["patient_ref"] for p in reviewer.get("/api/patients").json()] \
+        == ["their-patient"]
+
+    # Not merely absent from the list — unreachable by direct id, and 404 rather
+    # than 403 so the id cannot be used to confirm the record exists.
+    assert reviewer.get(f"/api/patients/{mine}").status_code == 404
+    assert client.get(f"/api/patients/{theirs}").status_code == 404
+    assert reviewer.get("/api/escalations").json() == []
+
+
+def test_signing_up_without_an_organisation_still_gets_a_private_workspace(client):
+    """Most people signing up are one person trying the product, not a hospital.
+    Leaving the field blank must not produce a shared or nameless space."""
+    r = client.post("/api/auth/signup", json={
+        "email": "solo@test.local", "password": GOOD_PASSWORD})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["organisation_id"]
+    assert "solo@test.local" in body["organisation"]
+
+
 # ------------------------------------------------------ the carer's credential
 def test_a_carer_reaches_one_checkin_with_a_token_and_no_login(client, db):
-    _bootstrap(client)
+    _signup(client)
     checkin_id = _make_patient(client)["check_in_ids"][0]
     token = client.get(f"/api/checkins/{checkin_id}/link").json()["token"]
 
@@ -364,7 +453,7 @@ def test_a_carer_reaches_one_checkin_with_a_token_and_no_login(client, db):
 def test_a_carer_token_grants_nothing_else(client, db):
     """As narrow as a credential gets: one check-in. Not the patient, not the
     list, not another check-in."""
-    _bootstrap(client)
+    _signup(client)
     first, second = _make_patient(client)["check_in_ids"]
     token = client.get(f"/api/checkins/{first}/link").json()["token"]
 
@@ -381,14 +470,14 @@ def test_a_carer_token_grants_nothing_else(client, db):
 
 
 def test_a_bad_token_is_rejected(client):
-    _bootstrap(client)
+    _signup(client)
     assert client.get("/api/checkins/by-token?token=not-a-real-token"
                       ).status_code == 404
 
 
 def test_an_answered_checkin_stops_accepting_its_token(client, db):
     """The carer's credential dies with the thing it was for."""
-    _bootstrap(client)
+    _signup(client)
     checkin_id = _make_patient(client)["check_in_ids"][0]
     token = client.get(f"/api/checkins/{checkin_id}/link").json()["token"]
 
@@ -403,7 +492,7 @@ def test_an_answered_checkin_stops_accepting_its_token(client, db):
 
 
 def test_issuing_a_carer_link_is_clinician_only_and_scoped(client, db):
-    _bootstrap(client)
+    _signup(client)
     checkin_id = _make_patient(client)["check_in_ids"][0]
 
     other = _second_org_client(TestClient, db)
@@ -411,7 +500,7 @@ def test_issuing_a_carer_link_is_clinician_only_and_scoped(client, db):
 
 
 # ------------------------------------------------------------------- migration
-def test_pre_auth_patients_are_adopted_at_bootstrap(client, db):
+def test_pre_auth_patients_are_adopted_at_signup(client, db):
     """An existing database has patients with no organisation. Every scoped query
     ignores them — safe, but it makes an upgraded install look empty. Adoption
     happens once, at bootstrap, when there is exactly one organisation to adopt
@@ -421,7 +510,7 @@ def test_pre_auth_patients_are_adopted_at_bootstrap(client, db):
     db.add(Patient(patient_ref="legacy-01", organisation_id=None))
     db.commit()
 
-    body = _bootstrap(client)
+    body = _signup(client)
     assert body["adopted_existing_patients"] == 1
     refs = [p["patient_ref"] for p in client.get("/api/patients").json()]
     assert "legacy-01" in refs

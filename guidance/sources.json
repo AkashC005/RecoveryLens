@@ -57,7 +57,8 @@
    "retrieved": "2026-07-31",
    "jurisdiction": "UK",
    "scope_caveat": "Not stroke-specific - covers medicines adherence in adults generally. Reached via an explicit cross-reference in NG236 section 1.17, which directs readers here for adherence support. Recommendation 1.4.2 has been superseded by NICE NG5.",
-   "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission."
+   "licence_note": "NICE copyright. Short attributed excerpts only, with deep link. Not for redistribution without NICE permission.",
+   "access_note": "nice.org.uk began returning 403 to programmatic requests (observed 13 Aug 2026). The NCBI Bookshelf mirror of the GUIDANCE version (NBK608568) is PDF-only - 'the full-text online version is forthcoming' - and NBK55440 is the full evidence review, whose chapter numbering (1-11) does not match the recommendation numbering (1.2.1) this corpus cites. So the 42 auto-extracted chunks are no longer obtainable and ingestion runs with --allow-dropped nice_cg76. The four HAND-VERIFIED entries under triggers.adherence_support are unaffected: they live in corpus.json and are never regenerated."
   },
   "ncgs_2023": {
    "id": "ncgs_2023",

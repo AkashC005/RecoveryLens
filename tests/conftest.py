@@ -140,7 +140,7 @@ def client():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     c = TestClient(app)
-    r = c.post("/api/auth/bootstrap", json={
+    r = c.post("/api/auth/signup", json={
         "email": "clinician@test.local", "password": TEST_PASSWORD,
         "organisation": "Test Stroke Unit"})
     assert r.status_code == 200, r.text

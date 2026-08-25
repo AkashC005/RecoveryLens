@@ -260,3 +260,56 @@ def test_no_escalation_when_nothing_fires(monkeypatch):
     assert out["escalated"] is False
     assert out["escalation_reason"] is None
     assert out["urgency"] == "routine"
+
+
+# --------------------------------------------------- why the agent did not run
+def test_no_free_text_is_not_reported_as_a_disabled_agent(monkeypatch):
+    """Two different facts must not collapse into one mode.
+
+    The clinician inbox showed "Agent disabled. Free-text notes were not read."
+    for a check-in where the agent was ENABLED and the carer had simply ticked the
+    boxes without writing a note. That is a screen asserting a configuration that
+    is not the real configuration — the same class of bug as the AiStatus one, and
+    worse here, because a clinician who believes "agent disabled" will draw the
+    wrong conclusion about every other check-in too.
+    """
+    from triage.agent import TriageAgent
+
+    monkeypatch.setenv("RECOVERYLENS_TRIAGE_AGENT", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused")
+
+    result = TriageAgent(FakeTools()).run(
+        free_text="   ", rule_escalations=["Medication not being taken"],
+        patient_id=1)
+
+    assert result.mode == "rules_only"
+    assert result.skipped_because == "no_free_text"
+    assert result.finalise()["skipped_because"] == "no_free_text"
+
+
+def test_a_switched_off_agent_says_so(monkeypatch):
+    from triage.agent import TriageAgent
+
+    monkeypatch.delenv("RECOVERYLENS_TRIAGE_AGENT", raising=False)
+
+    result = TriageAgent(FakeTools()).run(
+        free_text="he has been more confused since tuesday",
+        rule_escalations=[], patient_id=1)
+
+    assert result.mode == "rules_only"
+    assert result.skipped_because == "disabled"
+
+
+def test_the_two_reasons_are_distinguishable(monkeypatch):
+    """The property that matters, stated directly: same mode, different reason."""
+    from triage.agent import TriageAgent
+
+    monkeypatch.setenv("RECOVERYLENS_TRIAGE_AGENT", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unused")
+    quiet = TriageAgent(FakeTools()).run("", [], 1)
+
+    monkeypatch.delenv("RECOVERYLENS_TRIAGE_AGENT", raising=False)
+    off = TriageAgent(FakeTools()).run("something to read", [], 1)
+
+    assert quiet.mode == off.mode == "rules_only"
+    assert quiet.skipped_because != off.skipped_because

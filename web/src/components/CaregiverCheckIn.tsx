@@ -21,6 +21,13 @@ import { api, URGENCY_STYLES } from "../lib/api";
 import type { CheckInResult, DueCheckIn } from "../lib/api";
 import VoiceNote from "./VoiceNote";
 
+/** The check-in that is actually next. Ordering by id would be ordering by when
+ *  the row was written, which is not the same thing after a re-assessment. */
+function earliest(rows: DueCheckIn[]): DueCheckIn {
+  return [...rows].sort(
+    (a, b) => +new Date(a.scheduled_for) - +new Date(b.scheduled_for))[0];
+}
+
 function Toggle({ label, hint, value, onChange }: {
   label: string;
   hint?: string;
@@ -77,6 +84,25 @@ export default function CaregiverCheckIn({
   // below makes clear which case you are looking at.
   const [showingScheduled, setShowingScheduled] = useState(false);
 
+  // ONE row per patient: the soonest check-in that is still open.
+  //
+  // The list used to show every pending check-in, so a single patient with a
+  // seven-date follow-up plan filled the picker with seven near-identical rows
+  // reading "#4 · due 12/08/2026". That labels the row by our database id and
+  // the date, neither of which tells anyone WHO it is about — and nobody answers
+  // a check-in for day 42 while day 3 is still open, so the other six were noise.
+  const nextPerPatient = (() => {
+    const soonest = new Map<number, DueCheckIn>();
+    for (const c of due ?? []) {
+      const held = soonest.get(c.patient_id);
+      if (!held || new Date(c.scheduled_for) < new Date(held.scheduled_for)) {
+        soonest.set(c.patient_id, c);
+      }
+    }
+    return [...soonest.values()].sort(
+      (a, b) => +new Date(a.scheduled_for) - +new Date(b.scheduled_for));
+  })();
+
   useEffect(() => {
     if (carerToken) {
       api.checkInByToken(carerToken)
@@ -94,11 +120,11 @@ export default function CaregiverCheckIn({
           const upcoming = await api.dueCheckIns(true);
           setShowingScheduled(upcoming.length > 0);
           setDue(upcoming);
-          if (upcoming.length) setSelected(upcoming[0].id);
+          if (upcoming.length) setSelected(earliest(upcoming).id);
           return;
         }
         setDue(rows);
-        setSelected(rows[0].id);
+        setSelected(earliest(rows).id);
       })
       .catch((e) => setError(String(e)));
   }, [carerToken]);
@@ -179,18 +205,21 @@ export default function CaregiverCheckIn({
         </div>
       )}
 
-      {due.length > 1 && !carerToken && (
+      {nextPerPatient.length > 1 && !carerToken && (
         <div className="card p-4">
-          <label className="field-label" htmlFor="checkin">Which check-in?</label>
+          <label className="field-label" htmlFor="checkin">Who is this about?</label>
           <select
             id="checkin"
             className="field-input"
             value={selected ?? ""}
             onChange={(e) => setSelected(Number(e.target.value))}
           >
-            {due.map((d) => (
+            {nextPerPatient.map((d) => (
               <option key={d.id} value={d.id}>
-                #{d.id} · due {new Date(d.scheduled_for).toLocaleDateString()}
+                {d.patient_ref || `Patient ${d.patient_id}`} — due{" "}
+                {new Date(d.scheduled_for).toLocaleDateString(undefined, {
+                  day: "numeric", month: "short",
+                })}
               </option>
             ))}
           </select>

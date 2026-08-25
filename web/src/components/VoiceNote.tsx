@@ -198,6 +198,18 @@ export default function VoiceNote({
             &ldquo;{upload.transcript}&rdquo;
           </blockquote>
 
+          {upload.low_confidence && (
+            <div className="mt-3 rounded-md border border-amber/40 p-3">
+              <p className="text-sm text-amber">
+                That recording was hard to hear.
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                We&rsquo;ve still shown you what we think you said. Please read it
+                carefully — if any of it is wrong, discard it and record again.
+              </p>
+            </div>
+          )}
+
           {upload.warnings.length > 0 && (
             <div className="mt-3 rounded-md border border-amber/40 p-3">
               <p className="text-sm text-amber">

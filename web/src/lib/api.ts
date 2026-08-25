@@ -20,7 +20,9 @@ export type Actionability = "actionable" | "vigilance" | "exploratory";
 
 // ------------------------------------------------------------------- request
 export interface AssessmentRequest {
-  patient_ref?: string | null;
+  /** REQUIRED. How the patient appears in every list, escalation and carer link.
+   *  A ward reference or study number — never a real name. */
+  patient_ref: string;
   age: number;
   sex: Sex;
   hours_since_onset: number;
@@ -379,11 +381,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ------------------------------------------------------------------ autofill
+/** One field read from a discharge summary, with the sentence it came from.
+ *  The quote was verified against the document server-side — a value whose quote
+ *  is not in the document never reaches here. */
+export interface ExtractedField {
+  name: string;
+  value: unknown;
+  source: string;
+}
+
+export interface Extraction {
+  fields: ExtractedField[];
+  /** Proposed and refused, with the reason. Usually the quote was not actually
+   *  in the document, which is what a hallucination looks like from here.
+   *  Reported rather than hidden: "it tried and I refused" is different
+   *  information from "it found nothing". */
+  rejected: { name: string; value?: unknown; source?: string; reason: string }[];
+  /** Left BLANK, never guessed. A blank costs five seconds; a guess costs a
+   *  wrong risk tier that nobody knows to question. */
+  not_found: string[];
+  found_count: number;
+  extractable_count: number;
+  document_chars: number;
+  provider: string;
+  error: string | null;
+}
+
 // ----------------------------------------------------------------------- auth
 export interface AuthStatus {
-  /** True only while no account exists. The server tells us nothing else before
-   *  sign-in — no user count, no email, no organisation name. */
-  bootstrap_available: boolean;
+  /** Whether registration is offered at all. */
+  signup_open: boolean;
+  /** Whether this deployment requires a shared registration code. Neither field
+   *  reveals anything about who has an account here — no user count, no email,
+   *  no organisation name. */
+  signup_code_required: boolean;
 }
 
 export interface Me {
@@ -406,12 +438,13 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
-  /** Only works while no account exists. Creates the first clinician and their
-   *  organisation, and adopts any patients that predate authentication. */
-  bootstrap: (email: string, password: string, organisation: string) =>
-    request<{ adopted_existing_patients: number }>("/api/auth/bootstrap", {
+  /** Create an account. Always available. Registering creates your OWN
+   *  organisation, so what you enter is visible only to you until you invite
+   *  someone into it. */
+  signup: (email: string, password: string, organisation = "", code = "") =>
+    request<Me & { adopted_existing_patients: number }>("/api/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password, organisation }),
+      body: JSON.stringify({ email, password, organisation, code }),
     }),
 
   logout: () => request<{ signed_out: boolean }>("/api/auth/logout", {
@@ -434,6 +467,15 @@ export const api = {
     }),
 
   patients: () => request<PatientSummary[]>("/api/patients"),
+
+  /** Read a discharge summary into assessment fields. Creates nothing — it
+   *  returns values for a form the clinician then reviews and submits. */
+  extract: (body: Blob | string, contentType: string) =>
+    request<Extraction>("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body,
+    }),
 
   /** Full record for one patient: assessments with their inputs, every check-in
    *  with its triage trace, and whether the carer can be messaged at all. */
@@ -526,6 +568,9 @@ export type TriageMode = "rules_only" | "agent" | "agent_failed";
 export interface DueCheckIn {
   id: number;
   patient_id: number;
+  /** The label a human recognises. "#7" identifies the row in our database and
+   *  nothing anyone on a ward knows about. */
+  patient_ref: string | null;
   scheduled_for: string;
   completed_at: string | null;
   escalated: boolean;
@@ -564,6 +609,10 @@ export interface VoiceUpload {
   readback: string;
   transcript: string;
   confidence: number;
+  /** The recording was hard to hear. The transcript is still shown — a human
+   *  reading their own words back is a stronger check than a model's confidence
+   *  score, which measures how sure it was and not whether it was right. */
+  low_confidence: boolean;
   provider: string;
   /** Phrases where recognition characteristically drops a negation. "He can't
    *  move his arm" -> "He can move his arm" is fluent, plausible, and wrong in
@@ -603,6 +652,11 @@ export interface TriageRecord {
   tool_calls: TriageToolCall[];
   mode: TriageMode;
   agent_error: string | null;
+  /** Why the agent did not run, when mode is "rules_only". Distinguishing these
+   *  matters: the inbox used to say "Agent disabled" for check-ins where the
+   *  agent was enabled and the carer simply wrote no note — a screen asserting a
+   *  configuration that was not the real configuration. */
+  skipped_because?: "no_free_text" | "disabled" | null;
 }
 
 export interface Escalation {

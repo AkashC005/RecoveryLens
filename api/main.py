@@ -12,6 +12,7 @@ demonstrable artifact before any frontend exists.
 """
 
 from datetime import timedelta, timezone
+import hmac
 import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -26,12 +27,12 @@ from triage import TriageAgent, agent_enabled
 
 from pydantic import BaseModel
 
-from .auth import (COOKIE_NAME, access_token_for, bootstrap_available,
+from .auth import (COOKIE_NAME, access_token_for,
                    caregiver_or_clinician_checkin, checkin_by_access_token,
                    clear_session_cookie, create_session, create_user,
-                   current_user, dev_login_hint, revoke_session, scoped_checkin,
-                   scoped_patient, scoped_patients, set_session_cookie,
-                   verify_password)
+                   current_user, dev_login_hint, is_first_user, revoke_session,
+                   scoped_checkin, scoped_patient, scoped_patients,
+                   set_session_cookie, signup_code_required, verify_password)
 from .triage_tools import DatabaseToolBox
 from .media import router as media_router
 from .webhooks import router as messaging_router
@@ -71,6 +72,10 @@ app.add_middleware(
 app.include_router(messaging_router)
 app.include_router(media_router)
 
+# A discharge summary is a page or two of text; a text-layer PDF of one is under
+# a megabyte. Anything larger is the wrong document.
+MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
+
 # Held so the shutdown hook can stop it. None when scheduling is disabled.
 _scheduler = None
 
@@ -109,7 +114,7 @@ def startup() -> None:
               f"Check-ins can still be sent manually.")
 
     with SessionLocal() as session:
-        if bootstrap_available(session):
+        if is_first_user(session):
             print(f"\n{dev_login_hint()}\n")
 
     print("Ready.")
@@ -138,11 +143,15 @@ def health():
 
 
 # --------------------------------------------------------------------------- auth
-class BootstrapRequest(BaseModel):
+class SignupRequest(BaseModel):
     email: str
     password: str
-    organisation: str
+    # Optional. Defaults to a workspace named after the account, because most
+    # people signing up are one person trying the product, not a hospital.
+    organisation: str = ""
     full_name: str = ""
+    # Only checked when RECOVERYLENS_SIGNUP_CODE is set. See auth.signup_code_required.
+    code: str = ""
 
 
 class LoginRequest(BaseModel):
@@ -158,40 +167,50 @@ class InviteRequest(BaseModel):
     full_name: str = ""
 
 
-@app.post("/api/auth/bootstrap", tags=["auth"])
-def bootstrap(req: BootstrapRequest, request: Request, response: Response,
-              db: Session = Depends(get_db)):
-    """Create the first clinician account and organisation.
+@app.post("/api/auth/signup", tags=["auth"])
+def signup(req: SignupRequest, request: Request, response: Response,
+           db: Session = Depends(get_db)):
+    """Create an account and sign in.
 
-    Stops working permanently as soon as one user exists. This is the whole of the
-    compromise for having no "disable auth" flag: a fresh install needs some way in,
-    and this one closes behind itself and cannot be reopened by an environment
-    variable.
+    Open by default. The previous version allowed exactly one account ever — a
+    reviewer handed the app had no way in without someone provisioning them, and
+    the sign-in screen showed a password box with no way to get a password. A form
+    that offers no route to using it is not a security measure, it is a dead end.
+
+    **Registering creates your own organisation**, so what you enter is visible
+    only to you until you invite someone into it. That is the privacy model: not a
+    per-record permission system, but a private workspace per account, enforced by
+    the same `scoped_patients()` filter every patient read already goes through.
     """
-    if not bootstrap_available(db):
-        raise HTTPException(
-            409, "An account already exists. Ask an existing user to invite you.")
+    required = signup_code_required()
+    if required and not hmac.compare_digest(req.code.strip(), required):
+        # Compared in constant time, and refused with the same message whether the
+        # code was absent or wrong.
+        raise HTTPException(403, "That registration code is not valid.")
+
+    first = is_first_user(db)
     user = create_user(db, email=req.email, password=req.password,
                        organisation=req.organisation, full_name=req.full_name)
 
-    # Adopt patients created before authentication existed. They carry no
-    # organisation, so every scoped query already ignores them — safe, but it
-    # means an existing database appears empty after upgrading. Adoption happens
-    # once, only at bootstrap (when by definition there is exactly one
-    # organisation to adopt into), and the count is reported rather than done
-    # quietly.
-    adopted = (db.query(Patient)
-               .filter(Patient.organisation_id.is_(None))
-               .update({"organisation_id": user.organisation_id},
-                       synchronize_session=False))
-    if adopted:
-        db.commit()
-        print(f"[auth] adopted {adopted} pre-auth patient(s) into "
-              f"'{req.organisation}'.")
+    # Adopt patients created before authentication existed — only ever on the
+    # very first account, when there is exactly one organisation they could
+    # sensibly belong to. On any later signup this would hand one person's records
+    # to a stranger who happened to register next.
+    adopted = 0
+    if first:
+        adopted = (db.query(Patient)
+                   .filter(Patient.organisation_id.is_(None))
+                   .update({"organisation_id": user.organisation_id},
+                           synchronize_session=False))
+        if adopted:
+            db.commit()
+            print(f"[auth] adopted {adopted} pre-auth patient(s) into "
+                  f"'{user.organisation.name}'.")
 
     set_session_cookie(response, request, create_session(db, user))
     return {"id": user.id, "email": user.email,
             "organisation_id": user.organisation_id,
+            "organisation": user.organisation.name if user.organisation else "",
             "adopted_existing_patients": adopted}
 
 
@@ -240,12 +259,16 @@ def whoami(user: User = Depends(current_user)):
 def auth_status(db: Session = Depends(get_db)):
     """Unauthenticated on purpose, and says almost nothing.
 
-    The frontend needs to know whether to render a login form or a
-    create-first-account form before anyone is signed in. It returns only whether
-    bootstrap is still open — never a user count, never an email, never an
-    organisation name.
+    The sign-in screen needs two facts before anyone is signed in: whether to
+    offer registration at all, and whether to show a code field. Neither reveals
+    anything about who has an account here — no user count, no email, no
+    organisation name. An unauthenticated endpoint that names the hospital using
+    the software has told a stranger something they should have had to earn.
     """
-    return {"bootstrap_available": bootstrap_available(db)}
+    return {
+        "signup_open": True,
+        "signup_code_required": bool(signup_code_required()),
+    }
 
 
 @app.post("/api/auth/invite", tags=["auth"])
@@ -271,6 +294,57 @@ def checkin_link(checkin_id: int, db: Session = Depends(get_db),
     token = access_token_for(db, c)
     return {"check_in_id": c.id, "token": token,
             "path": f"/checkin?token={token}"}
+
+
+# --------------------------------------------------------------------- autofill
+@app.post("/api/extract", tags=["assessment"])
+async def extract_discharge_summary(request: Request,
+                                    user: User = Depends(current_user)):
+    """Read a discharge summary into assessment fields. Creates nothing.
+
+    Accepts a pasted document as `text/plain` or an uploaded `application/pdf`.
+    Raw body rather than multipart, for the same reason as the voice endpoint:
+    `UploadFile` needs python-multipart, which this app does not install.
+
+    This endpoint deliberately does NOT create a patient or run an assessment.
+    It returns values for a form the clinician then reviews — the read-back
+    pattern from voice, applied to a document. Autofill is the first feature
+    where a model writes into a CLINICAL INPUT rather than a display surface, so
+    the human confirmation step is not a nicety.
+
+    Every returned field carries the verbatim quote it came from, and that quote
+    was checked against the document before it got here.
+    """
+    from extraction import extract_from_text, text_from_pdf
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "No document received.")
+    if len(body) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(413, f"Document is larger than "
+                                 f"{MAX_DOCUMENT_BYTES // (1024 * 1024)}MB.")
+
+    content_type = (request.headers.get("content-type") or "").split(";")[0]
+    if "pdf" in content_type:
+        try:
+            document = text_from_pdf(body)
+        except ImportError:
+            raise HTTPException(
+                501, "PDF upload needs pypdf installed. Paste the text instead.")
+        except Exception as exc:
+            raise HTTPException(
+                400, f"Could not read that PDF ({type(exc).__name__}). If it is a "
+                     f"scan rather than a text PDF, paste the text instead.")
+        if not document.strip():
+            # A scanned PDF is images with no text layer. Saying so beats
+            # returning an empty form and letting them wonder.
+            raise HTTPException(
+                400, "That PDF contains no selectable text — it is probably a "
+                     "scan. Paste the text instead.")
+    else:
+        document = body.decode("utf-8", errors="replace")
+
+    return extract_from_text(document).to_json()
 
 
 @app.get("/api/meta/schema", tags=["meta"])
@@ -661,7 +735,9 @@ def due_checkins(include_scheduled: bool = False, db: Session = Depends(get_db),
         query = query.filter(CheckIn.scheduled_for <= utcnow())
     rows = query.order_by(CheckIn.scheduled_for).all()
     return [CheckInResponse(
-        id=c.id, patient_id=c.patient_id, scheduled_for=c.scheduled_for,
+        id=c.id, patient_id=c.patient_id,
+        patient_ref=c.patient.patient_ref if c.patient else None,
+        scheduled_for=c.scheduled_for,
         completed_at=c.completed_at, escalated=c.escalated, responses=c.responses,
     ) for c in rows]
 
@@ -678,7 +754,9 @@ def checkin_by_token(token: str, db: Session = Depends(get_db)):
     """
     c = checkin_by_access_token(token, db)
     return CheckInResponse(
-        id=c.id, patient_id=c.patient_id, scheduled_for=c.scheduled_for,
+        id=c.id, patient_id=c.patient_id,
+        patient_ref=c.patient.patient_ref if c.patient else None,
+        scheduled_for=c.scheduled_for,
         completed_at=c.completed_at, escalated=c.escalated, responses=c.responses)
 
 

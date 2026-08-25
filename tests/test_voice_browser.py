@@ -16,8 +16,12 @@ The gates, and what each is for
 -------------------------------
 1. NOTHING IS RECORDED UNTIL CONFIRMED. The transcript is parked in
    `triage["pending_voice"]`, never written to `responses`.
-2. LOW CONFIDENCE IS NOT INTERPRETED. Below MIN_CONFIDENCE the carer is asked
-   again rather than having their words guessed at.
+2. LOW CONFIDENCE IS A SIGNAL, NOT A GATE. A hard-to-hear recording is still
+   read back, with a warning attached — a human reading their own words is a
+   stronger check than a score that measures how sure the model was rather than
+   whether it was right. What IS still refused: nothing heard, a provider
+   failure, audio too short to contain speech, and text that looks invented from
+   silence, which is the one failure a human confirming cannot catch.
 3. NEGATION LOSS IS SURFACED. "he can't move his arm" transcribing as "he can
    move his arm" is the characteristic ASR failure and it runs in the reassuring
    direction, so it must reach the read-back.
@@ -201,28 +205,63 @@ def test_an_expired_readback_cannot_be_confirmed(carer, db, checkin, monkeypatch
 
 # --------------------------------------------- gate 2: low confidence is not read
 @pytest.mark.parametrize("confidence", [0.0, 0.3, MIN_CONFIDENCE - 0.01])
-def test_low_confidence_is_never_interpreted(carer, db, checkin, monkeypatch,
-                                             confidence):
-    """Below the threshold the words are not offered back as if understood.
+def test_low_confidence_is_shown_for_checking_not_thrown_away(
+        carer, db, checkin, monkeypatch, confidence):
+    """Reversed deliberately — see test_voice.py for the full reasoning.
 
-    Guessing at clinical meaning is the failure this gate exists to prevent — a
-    half-heard sentence about a stroke patient is worse than no sentence.
+    A human reading their own words back is a stronger check than the model's
+    confidence score, which measures how sure it was rather than whether it was
+    right. Refusing to show the transcript threw away information the carer had
+    already given us and made them type it again.
+
+    Still parked, still unconfirmed, still nothing written to `responses`.
     """
-    _use(monkeypatch, FakeSpeech(text="he can move his arm now", confidence=confidence))
+    _use(monkeypatch, FakeSpeech(text="he can move his arm now",
+                                 confidence=confidence))
+
+    body = _post_audio(carer, checkin.id).json()
+    assert body["usable"] is True
+    assert body["low_confidence"] is True
+    assert body["transcript"] == "he can move his arm now"
+    assert body["confirmed"] is False, "shown is not the same as recorded"
+
+    db.refresh(checkin)
+    assert checkin.triage["pending_voice"]["transcript"] == "he can move his arm now"
+    assert checkin.responses is None
+    assert checkin.completed_at is None
+
+
+def test_a_hallucinated_transcript_is_still_refused(carer, db, checkin, monkeypatch):
+    """The one refusal left, and the one a human cannot be relied on to catch."""
+    _use(monkeypatch, FakeSpeech(text="Thank you for watching!", confidence=0.95))
 
     body = _post_audio(carer, checkin.id).json()
     assert body["usable"] is False
     assert body["transcript"] == ""
-    assert body["confirmed"] is False
 
     db.refresh(checkin)
     assert "pending_voice" not in (checkin.triage or {})
     assert checkin.triage["voice_attempts"] == 1
-    assert checkin.responses is None
+
+
+def test_audio_too_short_is_refused_before_transcribing(carer, db, checkin,
+                                                        monkeypatch):
+    """Whisper invents sentences from silence, so a clip too short to contain
+    speech is refused before the provider is even asked."""
+    from voice import MIN_AUDIO_BYTES
+
+    provider = _use(monkeypatch, FakeSpeech(text="he fell down the stairs",
+                                            confidence=0.99))
+    body = _post_audio(carer, checkin.id, data=b"\x00" * (MIN_AUDIO_BYTES - 1)).json()
+
+    assert body["usable"] is False
+    assert provider.calls == [], "the provider must not be called at all"
+    db.refresh(checkin)
+    assert "too short" in checkin.triage["last_voice_error"]
 
 
 def test_repeated_failures_are_counted(carer, db, checkin, monkeypatch):
-    _use(monkeypatch, FakeSpeech(text="mumble", confidence=0.2))
+    _use(monkeypatch, FakeSpeech(text="[music]", confidence=0.2))
     for _ in range(3):
         _post_audio(carer, checkin.id)
     db.refresh(checkin)

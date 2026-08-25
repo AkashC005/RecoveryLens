@@ -247,6 +247,9 @@ def _apply_rules_only(checkin: CheckIn, sub, db: Session) -> dict:
         "agent_summary": "",
         "tool_calls": [],
         "mode": "rules_only",
+        # Set by _run_triage_agent when it completes. Until then the agent has
+        # simply not finished, which is neither "disabled" nor "nothing to read".
+        "skipped_because": None if (sub.free_text or "").strip() else "no_free_text",
         "agent_error": None,
         "agent_pending": True,
     }
@@ -391,13 +394,25 @@ def record_voice_note(checkin: CheckIn, audio: bytes, mime_type: str,
 
     Returns (message for the carer, transcript or None if unusable).
     """
-    from voice import (ConfirmationState, build_speech_provider,
-                       compose_readback, compose_unusable)
+    from voice import (ConfirmationState, MIN_AUDIO_BYTES,
+                       build_speech_provider, compose_readback, compose_unusable)
+
+    # Refuse before transcribing rather than after. Whisper given near-silence
+    # does not return an empty string — it invents a fluent sentence, and that is
+    # the one failure a human confirming the read-back cannot be relied on to
+    # catch, because it looks exactly like a real answer.
+    if len(audio) < MIN_AUDIO_BYTES:
+        state = dict(checkin.triage or {})
+        state["voice_attempts"] = state.get("voice_attempts", 0) + 1
+        state["last_voice_error"] = f"recording too short ({len(audio)} bytes)"
+        checkin.triage = state
+        return compose_unusable(), None
 
     transcript = build_speech_provider().transcribe(audio, mime_type)
     if not transcript.usable:
-        # Low confidence or a provider failure. We do not guess at clinical
-        # meaning; we ask again, and offer typing as a way out.
+        # Nothing heard, a provider failure, or text that looks invented from
+        # silence. NOT low confidence — that is read back with a warning now, see
+        # the note above MIN_CONFIDENCE in voice/speech.py.
         state = dict(checkin.triage or {})
         state["voice_attempts"] = state.get("voice_attempts", 0) + 1
         state["last_voice_error"] = transcript.error or "confidence below threshold"
@@ -497,6 +512,10 @@ async def submit_voice_note(checkin_id: int, request: Request,
         "readback": message,
         "transcript": transcript.text if transcript else "",
         "confidence": round(transcript.confidence, 3) if transcript else 0.0,
+        # True when the recording was hard to hear. The transcript is still shown
+        # — the carer reading their own words is a stronger check than the score —
+        # but the UI asks them to read it more carefully.
+        "low_confidence": bool(transcript and transcript.low_confidence),
         "provider": transcript.provider if transcript else "",
         # Phrases where speech recognition characteristically drops a negation —
         # "he can't move his arm" becoming "he can move his arm", which reads as

@@ -65,8 +65,17 @@ class AssessmentRequest(BaseModel):
     """Everything recorded at discharge. Optional fields default to the most
     common value so a rushed ward entry still produces a usable result."""
 
-    patient_ref: str | None = Field(
-        None, description="Your own identifier. Never send a real patient name.")
+    patient_ref: str = Field(
+        ..., min_length=1, max_length=64,
+        description="REQUIRED. Your own identifier for this patient — a ward "
+                    "reference, a study number, initials plus a digit. It is how "
+                    "they appear in every list and every escalation, so an "
+                    "unlabelled patient is one a clinician cannot act on.\n\n"
+                    "NOT a real name. `database.py` states the rule and India's "
+                    "DPDP Act is the reason: this database has no clinical "
+                    "governance around it and a name is directly identifying. "
+                    "Required and pseudonymous are not in tension — the point is "
+                    "that the ward can tell patients apart, not that we can.")
 
     # demographics
     age: int = Field(..., ge=16, le=110)
@@ -457,6 +466,10 @@ class PatientDetail(BaseModel):
 class CheckInResponse(BaseModel):
     id: int
     patient_id: int
+    # The label a human recognises. Without it the check-in picker could only show
+    # "#7", which identifies the row in our database and nothing a clinician or
+    # carer knows about.
+    patient_ref: str | None = None
     scheduled_for: datetime
     completed_at: datetime | None
     escalated: bool

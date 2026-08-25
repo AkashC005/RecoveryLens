@@ -195,6 +195,22 @@ class TriageResult:
     mode: str = "rules_only"          # rules_only | agent | agent_failed
     error: str | None = None
 
+    # WHY the agent did not run, when mode is "rules_only". These are two
+    # completely different facts and collapsing them into one mode made the
+    # clinician inbox state something false: it reported "Agent disabled" for a
+    # check-in where the agent was enabled and simply had nothing to read,
+    # because the carer ticked the boxes and wrote no note.
+    #
+    # That is the same class of bug as the AiStatus one — a screen asserting a
+    # configuration that is not the actual configuration. A clinician who reads
+    # "agent disabled" and believes it will draw the wrong conclusion about every
+    # other check-in too.
+    #
+    #   "no_free_text" — the agent is on; the carer wrote nothing to read
+    #   "disabled"     — RECOVERYLENS_TRIAGE_AGENT is off
+    #   None           — the agent ran (mode is "agent" or "agent_failed")
+    skipped_because: str | None = None
+
     def finalise(self) -> dict:
         # Rules first, verbatim. Agent reasons appended, de-duplicated, order
         # preserved. There is deliberately no branch that drops a rule reason.
@@ -224,6 +240,7 @@ class TriageResult:
             ],
             "mode": self.mode,
             "agent_error": self.error,
+            "skipped_because": self.skipped_because,
         }
 
 
@@ -267,8 +284,10 @@ class TriageAgent:
         result = TriageResult(rule_escalations=list(rule_escalations))
 
         if not free_text or not free_text.strip():
+            result.skipped_because = "no_free_text"
             return result
         if not agent_enabled():
+            result.skipped_because = "disabled"
             return result
 
         try:

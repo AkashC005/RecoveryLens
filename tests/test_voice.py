@@ -61,8 +61,28 @@ def test_flag_text_tells_the_reader_what_to_do():
 
 
 # ------------------------------------------------------------- confidence
-def test_low_confidence_transcript_is_not_usable():
-    assert not _t("he seems worse", confidence=MIN_CONFIDENCE - 0.01).usable
+def test_low_confidence_is_read_back_with_a_warning_not_refused():
+    """Confidence is a SIGNAL, not a gate. This reverses the original design.
+
+    The read-back is a human reading their own words verbatim and saying yes or
+    no. That is a far stronger check than a number — Whisper's "confidence" is a
+    proxy from average log-probability, so it measures how sure the model was and
+    not whether it was right, which is exactly why a fluent mis-transcription
+    scores WELL.
+
+    Refusing on it therefore blocked cases a human would have caught in a glance
+    and let through the case a human is needed for. A carer who said something
+    important got "sorry, I couldn't make that out" and had to type it instead.
+    """
+    from voice import compose_readback
+
+    t = _t("he seems worse", confidence=MIN_CONFIDENCE - 0.01)
+    assert t.usable, "a hard-to-hear recording is still shown for checking"
+    assert t.low_confidence
+
+    message = compose_readback(t)
+    assert "he seems worse" in message
+    assert "hard to hear" in message, "the warning must travel with the read-back"
 
 
 def test_transcript_with_an_error_is_never_usable():
@@ -74,9 +94,40 @@ def test_empty_transcript_is_not_usable():
     assert not _t("", confidence=0.99).usable
 
 
-def test_usable_requires_clearing_the_floor():
-    assert _t("he had a fall", confidence=MIN_CONFIDENCE).usable
-    assert not _t("he had a fall", confidence=MIN_CONFIDENCE - 0.001).usable
+@pytest.mark.parametrize("confidence", [0.0, 0.3, 0.74, 0.75, 0.99])
+def test_no_confidence_is_low_enough_to_refuse_a_read_back(confidence):
+    """The only refusals left are: nothing heard, provider failed, or the text
+    looks invented from silence."""
+    assert _t("he had a fall", confidence=confidence).usable
+
+
+@pytest.mark.parametrize("text", [
+    "Thank you for watching!",
+    "Subtitles by the Amara.org community",
+    "Please subscribe to the channel",
+    "[music]",
+    "   ",
+])
+def test_hallucinated_text_is_still_refused(text):
+    """The one case a human confirming CANNOT be relied on to catch.
+
+    Whisper given near-silence does not return an empty string — it emits a
+    fluent, plausible sentence, commonly subtitle boilerplate absorbed from
+    training data. Presented with a confident-looking sentence, a tired carer may
+    tap yes without reading it. So this is refused before anyone sees it.
+    """
+    assert not _t(text, confidence=0.99).usable
+
+
+@pytest.mark.parametrize("text", [
+    "he had a fall yesterday",
+    "she cannot move her arm",
+    "no change since last week",
+])
+def test_real_answers_are_not_mistaken_for_hallucinations(text):
+    """The guard must be narrow. A false positive costs one retry; being too
+    aggressive would reintroduce the problem it replaced."""
+    assert _t(text, confidence=0.4).usable
 
 
 def test_high_confidence_is_a_stricter_bar_than_usable():

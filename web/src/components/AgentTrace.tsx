@@ -107,7 +107,15 @@ export default function AgentTrace({
           )}
           {t.mode === "rules_only" && (
             <p className="text-xs text-muted">
-              Agent disabled. Free-text notes were not read.
+              {t.skipped_because === "no_free_text"
+                ? "The carer answered the questions but wrote no note, so there " +
+                  "was nothing for the agent to read. The flags above come from " +
+                  "the rule checks."
+                : t.skipped_because === "disabled"
+                  ? "Triage agent is switched off (RECOVERYLENS_TRIAGE_AGENT). " +
+                    "Free-text notes were not read."
+                  : "The agent has not reported on this check-in. It runs in the " +
+                    "background after a reply; reload in a moment."}
             </p>
           )}
         </div>

@@ -22,7 +22,7 @@ worked**.
 ```bash
 cd ~/Desktop/"Recovery Lens"
 source .venv/bin/activate
-rm -f recoverylens.db
+python scripts/reset_demo.py
 ```
 
 **Why:** patients accumulate check-in IDs. Starting fresh means IDs 1–7 belong to
@@ -66,7 +66,7 @@ audio, which is easy to miss.
 
 ```bash
 pip install pypdf
-python -m guidance.ingest       # rewrites `chunks`, preserves hand-verified `triggers`
+python -m guidance.ingest --allow-dropped nice_cg76
 python -m guidance.embeddings   # embeds the new chunks
 python -m guidance.tune_floor   # prints the floor to set in retrieval.py
 ```
@@ -76,6 +76,13 @@ python -m guidance.tune_floor   # prints the floor to set in retrieval.py
 consisted of nothing but links to other sections. Until ingestion re-runs, the
 corpus on disk is still the contaminated one.
 
+**Why `--allow-dropped nice_cg76`:** nice.org.uk now returns **403** to
+programmatic requests. The guard refuses to write when a source that previously
+contributed chunks contributes none — that is what catches a site redesign quietly
+halving the corpus — so a permanently blocked source has to be acknowledged by
+name. It costs 42 auto chunks (5.5%) on medicines adherence, the one topic where
+four hand-verified entries already exist and are untouched.
+
 **Expect:** fewer chunks than the 764 of the last run, and `tune_floor` reporting
 **CLEAN SEPARATION**. If it reports an overlap, set `EMBED_FLOOR` in
 `guidance/retrieval.py` to the number it recommends — a denser corpus raises every
@@ -84,7 +91,7 @@ score, including the ones that must be refused.
 ### 0.2c Create a clinician account
 
 **What:** the database was wiped in 0.1, so there is no account. Open
-<http://localhost:5173> and the sign-in screen offers **Create the first account**.
+<http://localhost:5173> and choose **Create an account**.
 
 ```
 Organisation:  Apollo Stroke Unit
@@ -95,8 +102,8 @@ Password:      at least 12 characters
 **Why:** every route that reads a patient now requires a session, and patients
 belong to an organisation. There is deliberately **no flag that disables
 authentication** — a `RECOVERYLENS_AUTH=0` would get set once during a demo and
-never unset. `POST /api/auth/bootstrap` is the way in, and it stops working
-permanently as soon as one account exists.
+never unset. Registration is open instead, and each account gets its OWN
+organisation, so two people reviewing this see none of each other's patients.
 
 **What proves it worked:** the header shows *Apollo Stroke Unit* and a **Sign out**
 link. `curl -s localhost:8000/api/patients` with no cookie returns **401**.

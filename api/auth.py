@@ -16,13 +16,24 @@ Three principles, in the order they matter
    codebase is off by default and degrades gracefully — the right pattern for a
    model that might be unavailable, and the wrong one for access control. A
    `RECOVERYLENS_AUTH=0` would eventually be set in a deployment by someone
-   debugging at 2am, and never unset. Instead there is a bootstrap path for the
-   first account, and it closes permanently once a user exists.
+   debugging at 2am, and never unset. Anyone may register, but nobody may read a
+   patient without a session.
 
 2. **AUTHENTICATION WITHOUT AUTHORISATION IS NOT A FIX.** A login that lets every
    clinician read every hospital's patients is the breach people actually suffer.
    Patients belong to an `Organisation`; queries filter on the caller's org.
    `scoped_patient()` is the only sanctioned way to load one.
+
+   **Registering creates your own organisation.** So by default an account sees
+   only what that account entered — a reviewer, a judge and you can each sign up
+   and none of you sees the others' patients. Sharing is opt-in, through
+   `/api/auth/invite`, which can only add someone to the inviter's OWN
+   organisation. There is no route that places a user in another one.
+
+   The trade-off is real and worth naming: a colleague cannot cover for you until
+   you invite them. For a hospital ward that is wrong, and the fix is to invite
+   the team into one organisation. For a prototype being handed to reviewers,
+   private-by-default is the safer error.
 
 3. **CARERS DO NOT LOG IN.** Asking the family of a stroke patient to create an
    account and remember a password, on a phone, while worried, means the check-ins
@@ -257,14 +268,24 @@ def caregiver_or_clinician_checkin(
 
 
 # -------------------------------------------------------------------- bootstrap
-def bootstrap_available(db: Session) -> bool:
-    """True only while no user exists.
-
-    This is the whole of the "no auth flag" compromise: a fresh install needs some
-    way to create its first account, and this closes the moment one exists. It
-    cannot be reopened by an environment variable.
-    """
+def is_first_user(db: Session) -> bool:
+    """True while no user exists. Used only to decide whether to adopt orphans."""
     return db.query(User).count() == 0
+
+
+def signup_code_required() -> str:
+    """An optional shared code for registration. Empty means open registration.
+
+    Off by default, because the immediate need is for a reviewer to create their
+    own account without anyone provisioning it. But open registration on a public
+    URL means anyone who finds it gets a workspace, so this exists for the moment
+    that becomes a problem — set RECOVERYLENS_SIGNUP_CODE and only people you have
+    given the code to can register.
+
+    It is not a security boundary. It is a speed bump, and it is named honestly as
+    one: it stops casual signups, not anyone determined.
+    """
+    return os.getenv("RECOVERYLENS_SIGNUP_CODE", "").strip()
 
 
 def create_user(db: Session, *, email: str, password: str, organisation: str,
@@ -279,7 +300,7 @@ def create_user(db: Session, *, email: str, password: str, organisation: str,
         raise HTTPException(409, "An account with that email already exists.")
 
     if org_id is None:
-        org = Organisation(name=organisation.strip() or "Unnamed organisation")
+        org = Organisation(name=organisation.strip() or f"{email}'s workspace")
         db.add(org)
         db.commit()
         db.refresh(org)
@@ -296,9 +317,9 @@ def create_user(db: Session, *, email: str, password: str, organisation: str,
 def dev_login_hint() -> str:
     """Printed at startup when no account exists, so a fresh clone is not a
     locked door with no key and no message."""
-    return ("No clinician account exists yet. Create the first one:\n"
-            "    curl -X POST http://localhost:8000/api/auth/bootstrap \\\n"
+    return ("No clinician account exists yet. Open the app and choose "
+            "'Create an account', or:\n"
+            "    curl -X POST http://localhost:8000/api/auth/signup \\\n"
             "      -H 'Content-Type: application/json' \\\n"
             "      -d '{\"email\":\"you@example.com\",\"password\":\"choose-a-long-one\","
-            "\"organisation\":\"Your hospital\"}'\n"
-            "This endpoint stops working as soon as one account exists.")
+            "\"organisation\":\"Your hospital\"}'")

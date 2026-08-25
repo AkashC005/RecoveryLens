@@ -1,6 +1,6 @@
 # RecoveryLens — status
 
-383 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
+388 tests passing. Four new packages: `guidance/`, `triage/`, `messaging/`, `voice/`.
 
 **Last verified:** 9 Aug 2026 — full 13-step walkthrough (`docs/WALKTHROUGH.md`)
 run from an empty database. Steps 1–10 confirmed live, including a real WhatsApp
@@ -60,11 +60,11 @@ falls?" against a corpus that says "recognise the complications ... including
 frequent falls". Degrades to TF-IDF alone if the cache or key is missing.
 
 **Expanding the corpus caused a safety regression, and measurement caught it.**
-Both refusal floors were measured at 291 passages and both became unsafe at 774:
+Both refusal floors were measured at 291 passages and both became unsafe as it grew:
 
-| | measured at 291 | measured at 774 | highest out-of-scope |
+| | measured at 291 | measured at 737 | highest out-of-scope |
 |---|---|---|---|
-| `EMBED_FLOOR` (blended) | 0.28 | **0.405** | alteplase 0.392, MI 0.351, glioma 0.282 |
+| `EMBED_FLOOR` (blended) | 0.28 | **0.407** | alteplase 0.391, MI 0.350, glioma 0.280 |
 | `SCORE_FLOOR` (TF-IDF only) | 0.22 | **0.24** | MI 0.222 |
 
 At the old floors the retriever would have answered *"how do I manage a myocardial
@@ -73,9 +73,10 @@ infarction?"* with stroke recommendations and a citation. Adding coverage raises
 growing a corpus, and why these numbers are measured rather than chosen. A test in
 the suite failed on it before anything else was touched.
 
-**Final state: CLEAN SEPARATION.** Lowest in-scope 0.418 ("what about sexual
-function?"), highest out-of-scope 0.392 (alteplase). Margin 0.026 — narrow but
-real, and it did not come from lowering the floor. Two fixes closed it:
+**Final state: CLEAN SEPARATION at 737 passages** (39 curated + 698 ingested).
+Lowest in-scope 0.424 ("what about sexual function?"), highest out-of-scope 0.391
+(alteplase). **Margin 0.033**, and none of it came from lowering the floor. Three
+fixes got there:
 
 1. **A query-side synonym.** "Should statins be continued?" was the lowest
    in-scope score at 0.366 and the only question the floor would have refused,
@@ -83,14 +84,31 @@ real, and it did not come from lowering the floor. Two fixes closed it:
    acute stroke who are already receiving statins"*) and RCP 5.5 B. The answer was
    there; the words were not. `statin → lipid` moved it to **0.436, a gain of
    0.070**.
-2. **Duplicate suppression** — 803 → 774 passages, removing 29 curated
-   recommendations that ingestion had re-extracted and that were competing with
-   their own hand-verified copies.
+2. **Duplicate suppression** — removing curated recommendations that ingestion had
+   re-extracted and that were competing with their own hand-verified copies.
+3. **The RCP parser fix**, measured rather than assumed. Removing 94 contaminated
+   chunks and 3 pure-navigation ones moved the in-scope floor **up** (0.418 →
+   0.424) and left every out-of-scope score essentially unchanged (0.392 → 0.391).
+   Cleaner chunks retrieve better for questions the corpus can answer and no better
+   for questions it cannot — the direction you want, and not one worth assuming
+   without checking. Verified in the written file: contaminated chunks 94 → **0**,
+   navigation-only 3 → **0**.
 
-`EMBED_CONFIDENT` widened 0.42 → 0.44, so the five in-scope questions closest to
-the ceiling (0.418–0.436) are answered *with* the marginal note. Five hedges out
-of 25 is more than before and correct: with 0.026 of separation, a question low in
-the in-scope range genuinely is close to one that would be refused.
+`EMBED_CONFIDENT` widened 0.42 → 0.44, so the four in-scope questions closest to
+the ceiling (0.424–0.435) are answered *with* the marginal note. Four hedges out of
+25 is more than the old policy allowed and correct: with 0.033 of separation, a
+question low in the in-scope range genuinely is close to one that would be refused.
+
+**`nice_cg76` is gone from the auto corpus.** nice.org.uk began returning 403 to
+programmatic requests (13 Aug 2026). The NCBI mirror of the *guidance* version is
+PDF-only, and the mirror of the *evidence review* numbers chapters 1–11 rather than
+recommendations, so pointing at it would have produced 42 chunks whose section
+numbers look right and cite the wrong thing. Worse than losing the source, so the
+source was lost: `--allow-dropped nice_cg76`, recorded as an `access_note` in
+`sources.json`. Cost: 42 auto chunks (5.5%) on medicines adherence — the one topic
+where four hand-verified entries already exist and are untouched, which is why
+"how do I support medication adherence?" is still the *highest* in-scope score at
+0.622.
 
 Alteplase stays high because it *is* a stroke drug and both NG128 and RCP 3.5
 cover thrombolysis. The corpus holds indications, timing and service requirements
@@ -103,7 +121,7 @@ an irrelevance, and the probe label was re-verified rather than assumed.
 answer to a legitimate question, now unreachable without embeddings. Recorded in
 `test_tfidf_only_mode_is_measurably_weaker_now`, which fails if it ever becomes
 retrievable again. Embeddings were an optional improvement at 291 passages; at
-774 they are load-bearing.
+737 they are load-bearing.
 
 **29 of 35 curated entries were duplicated by ingested chunks.** Ingestion
 re-reads the documents a human already read, so the index held two copies of
@@ -123,7 +141,7 @@ corpus could manage.
 - 24% after the first ingestion (the overlap gate was also silently rejecting
   every single-keyword question — "what about spasticity?" has one content word)
 - 0% after embeddings, at 291 passages
-- **still 0% at 774 passages**, now with a floor *above* every out-of-scope
+- **still 0% at 737 passages**, now with a floor *above* every out-of-scope
   question rather than below the stroke-adjacent ones. That is a stronger claim
   than the earlier 0%: the same coverage with a stricter refusal boundary.
 
@@ -417,17 +435,9 @@ from sleep does not fire a backlog of missed runs at once.
       NG128 64, CG76 42, **RCP 512**. Floors re-measured, see above.
 - [x] ~~Re-measure the floors~~ — done. Clean separation at 774 passages,
       `EMBED_FLOOR = 0.405`, **0 of 25 probe questions refused**.
-- [ ] **Re-ingest, re-embed, re-measure** — the RCP parser now stops at the
-      apparatus block and drops cross-reference lists, so chunk counts will fall:
-
-          python -m guidance.ingest
-          python -m guidance.embeddings
-          python -m guidance.tune_floor
-
-      94 of 512 RCP chunks (18%) had "Sources, evidence to recommendations,
-      implications" absorbed into them, and some consisted of nothing but links to
-      other sections. Fewer, cleaner chunks will shift the score distribution, so
-      the floors need re-measuring once more.
+- [x] ~~Re-ingest, re-embed, re-measure~~ — done. 723 chunks / 737 passages,
+      contamination 94 → **0**, `EMBED_FLOOR = 0.407`, clean separation with a
+      **wider** margin than before (0.033 vs 0.026). See the guidance section.
 - [ ] **ISA never ingested** — `stroke-india.org` returns 403 to a programmatic
       request; it serves the PDF to a browser and refuses an unrecognised client.
       Rather than disguise the request, ingestion now looks on disk first:

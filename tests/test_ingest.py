@@ -237,6 +237,71 @@ def test_rcp_letters_outside_a_recommendations_block_are_not_chunks():
     assert parse_rcp(text, "ncgs_2023") == []
 
 
+# ------------------------------------------------ the dropped-source guard
+def test_a_source_that_stops_contributing_blocks_the_write(monkeypatch, capsys):
+    """The guard that saved the corpus when NICE started returning 403.
+
+    A publisher blocking programmatic access, or a site redesign the parser no
+    longer matches, both present as "this source contributed nothing". Writing
+    anyway would silently shrink the corpus, and the only symptom would be worse
+    answers — indistinguishable from the retriever simply being bad.
+    """
+    from guidance import ingest
+
+    monkeypatch.setattr(ingest, "_previous_counts", lambda: {"nice_cg76": 42})
+    monkeypatch.setattr(ingest, "SOURCES", {})
+    monkeypatch.setattr(ingest, "fetch", lambda url, timeout=60.0: "")
+
+    wrote = []
+    monkeypatch.setattr(ingest, "write", lambda *a, **k: wrote.append(True))
+    monkeypatch.setattr(ingest, "ingest", lambda docs: (
+        [{"id": "x", "source_id": "nice_ng236", "section": "1.1.1",
+          "excerpt": "text", "extraction": "automatic",
+          "citation_precision": "recommendation"}],
+        [ingest.IngestReport(source_id="nice_ng236", chunks=1)]))
+    monkeypatch.setattr(ingest, "SOURCES", {"nice_ng236": {"urls": ["u"],
+                                                           "parser": "nice"}})
+
+    assert ingest.main([]) == 1
+    assert not wrote, "the corpus must be left as it was"
+    err = capsys.readouterr().err
+    assert "nice_cg76" in err
+    assert "--allow-dropped" in err, "the message must say how to proceed"
+
+
+def test_the_escape_requires_naming_the_source(monkeypatch, capsys):
+    """`--allow-dropped nice_cg76` works; a bare flag or a different id does not.
+
+    Deliberately awkward. Without any escape the guard wedges the pipeline forever
+    once a publisher blocks access, and the next person disables the guard
+    entirely — which is far worse than acknowledging one source by name.
+    """
+    from guidance import ingest
+
+    monkeypatch.setattr(ingest, "_previous_counts", lambda: {"nice_cg76": 42})
+    monkeypatch.setattr(ingest, "fetch", lambda url, timeout=60.0: "")
+    monkeypatch.setattr(ingest, "SOURCES", {"nice_ng236": {"urls": ["u"],
+                                                           "parser": "nice"}})
+    monkeypatch.setattr(ingest, "ingest", lambda docs: (
+        [{"id": "x", "source_id": "nice_ng236", "section": "1.1.1",
+          "excerpt": "text", "extraction": "automatic",
+          "citation_precision": "recommendation"}],
+        [ingest.IngestReport(source_id="nice_ng236", chunks=1)]))
+
+    wrote = []
+    monkeypatch.setattr(ingest, "write", lambda *a, **k: wrote.append(True))
+
+    # Naming a DIFFERENT source does not acknowledge this one.
+    assert ingest.main(["--allow-dropped", "isa_2024"]) == 1
+    assert not wrote
+
+    assert ingest.main(["--allow-dropped", "nice_cg76"]) == 0
+    assert wrote, "an acknowledged drop should proceed"
+    out = capsys.readouterr().out
+    assert "nice_cg76" in out and "allowed to drop" in out, \
+        "an allowed drop must still be reported, not silent"
+
+
 # ------------------------------------------------- the one-file safety boundary
 def test_curated_and_automatic_live_in_one_file_separated_by_extraction():
     """corpus.json holds both tiers. The `extraction` field is the boundary.

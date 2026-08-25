@@ -44,14 +44,74 @@ from dataclasses import dataclass, field
 from typing import Protocol
 import os
 
-# Below this, we do not interpret the transcript at all. Chosen deliberately
-# high: the cost of asking a carer to repeat themselves is small, and the cost
-# of acting on a misheard clinical report is not.
+# Confidence is a SIGNAL, not a gate. This changed deliberately — the reasoning is
+# worth keeping.
+#
+# The original design refused to read back anything below MIN_CONFIDENCE, on the
+# view that a half-heard clinical report should not be interpreted. But the
+# read-back is a HUMAN reading their own words verbatim and saying yes or no, and
+# that is a far stronger check than a number. Whisper's "confidence" is a proxy
+# derived from average token log-probability. It measures how sure the model was,
+# not whether the model was right — which is exactly why a fluent
+# mis-transcription scores WELL. Gating on it therefore blocked cases a human
+# would have caught in one glance, and let through the case a human is needed for.
+#
+# So the refusal was doing real harm and little good: a carer who said something
+# important got "sorry, I couldn't make that out" and had to type it instead,
+# when the transcript was probably fine and they could have checked it in two
+# seconds.
+#
+# Below MIN_CONFIDENCE the transcript is now still read back, with a warning
+# attached saying we are unsure. The human decides.
 MIN_CONFIDENCE = 0.75
 
-# Above this we still ask for confirmation, but treat the transcript as usable
-# for a read-back. Between the two, we read back and say we were unsure.
+# Above this we do not add the "we were unsure" warning. Confirmation is still
+# required — there is no score high enough to skip the read-back.
 GOOD_CONFIDENCE = 0.90
+
+# The one thing a human check does NOT protect against.
+#
+# Whisper hallucinates on silence and noise. Given a near-empty recording it does
+# not return an empty string; it emits a fluent, plausible sentence — commonly
+# subtitle boilerplate absorbed from its training data. That is the case where
+# "just show it and let them confirm" fails, because a tired carer presented with
+# a confident-looking sentence may well tap yes without reading it properly.
+#
+# So there is still one refusal, and it is narrow: text that matches known
+# hallucination boilerplate, or audio too short to contain speech, is not offered
+# for confirmation at all.
+HALLUCINATION_MARKERS = (
+    "thank you for watching",
+    "thanks for watching",
+    "subscribe to",
+    "please subscribe",
+    "see you in the next video",
+    "amara.org",
+    "subtitles by",
+    "transcription by",
+    "www.",
+    "[music]",
+    "[applause]",
+    "[silence]",
+    "you you you",
+)
+
+# Under this many bytes there is not enough audio to contain a sentence, whatever
+# the transcript claims to say.
+MIN_AUDIO_BYTES = 1024
+
+
+def looks_hallucinated(text: str) -> bool:
+    """Whether a transcript is probably invented from silence rather than heard.
+
+    Deliberately conservative — it only matches phrases no carer would say about a
+    stroke patient. A false positive costs one retry; a false negative puts an
+    invented sentence in front of someone who might confirm it.
+    """
+    lowered = " ".join(text.lower().split())
+    if not lowered:
+        return True
+    return any(marker in lowered for marker in HALLUCINATION_MARKERS)
 
 
 @dataclass
@@ -66,12 +126,25 @@ class Transcript:
 
     @property
     def usable(self) -> bool:
-        """Whether this may be read back to the carer at all."""
-        return bool(self.text.strip()) and self.confidence >= MIN_CONFIDENCE and not self.error
+        """Whether this may be READ BACK to the carer.
+
+        No longer gated on confidence — see the note above MIN_CONFIDENCE. What is
+        still refused: nothing was heard, the provider failed, or the text looks
+        like a hallucination from silence, which is the one failure a human
+        confirming cannot be relied on to catch.
+        """
+        return (bool(self.text.strip())
+                and not self.error
+                and not looks_hallucinated(self.text))
 
     @property
     def high_confidence(self) -> bool:
         return self.confidence >= GOOD_CONFIDENCE
+
+    @property
+    def low_confidence(self) -> bool:
+        """Read back anyway, but say we are unsure. A signal, not a gate."""
+        return self.confidence < MIN_CONFIDENCE
 
 
 @dataclass

@@ -178,13 +178,14 @@ SINGLE_TERM_FLOOR = 0.30
 # number is a property of the corpus, not of the code.
 #
 # ---------------------------------------------------------------------------
-# FINAL measurement at 774 passages (39 curated + 735 ingested, NICE + RCP,
-# after duplicate suppression). CLEAN SEPARATION:
+# FINAL measurement at 737 passages (39 curated + 698 ingested; NICE NG236 and
+# NG128 plus RCP, after the parser fix and duplicate suppression). CLEAN
+# SEPARATION:
 #
-#   in scope, lowest      0.418  "what about sexual function?"
-#   out of scope, highest 0.392  "what is the correct dose of alteplase?"
-#                         0.351  "how do I manage a myocardial infarction?"
-#                         0.282  "what are the surgical options for glioma?"
+#   in scope, lowest      0.424  "what about sexual function?"
+#   out of scope, highest 0.391  "what is the correct dose of alteplase?"
+#                         0.350  "how do I manage a myocardial infarction?"
+#                         0.280  "what are the surgical options for glioma?"
 #   plainly unrelated     0.180  meningitis · 0.161 hernia · 0.075 France
 #
 # The previous value was 0.28, measured at 291 passages. Keeping it would have
@@ -206,26 +207,39 @@ SINGLE_TERM_FLOOR = 0.30
 #   2. Suppressing the 29 curated recommendations that ingestion re-extracted as
 #      chunks, which had been competing with their own hand-verified copies.
 #
-# Margin: 0.026 (0.392 -> 0.418). Narrow but real. Alteplase stays high because it
-# IS a stroke drug and both NG128 and RCP 3.5 cover thrombolysis — the corpus holds
-# indications, timing and service requirements but no dosing at all (`mg/kg`
-# appears in zero chunks). A category error, not an irrelevance.
-EMBED_FLOOR = 0.405
+# Margin: 0.033 (0.391 -> 0.424), up from 0.026 before the RCP parser fix. Removing
+# 94 contaminated chunks — recommendations that had absorbed each section's
+# "Sources, evidence to recommendations" apparatus block, plus 3 that were nothing
+# but cross-reference lists — moved the in-scope floor UP and left every
+# out-of-scope score essentially unchanged. Cleaner chunks retrieve better for
+# questions the corpus can answer and no better for questions it cannot, which is
+# the direction you want and not one worth assuming without measuring.
+#
+# Alteplase stays high because it IS a stroke drug and both NG128 and RCP 3.5 cover
+# thrombolysis — the corpus holds indications, timing and service requirements but
+# no dosing at all (`mg/kg` appears in zero chunks). A category error, not an
+# irrelevance.
+#
+# nice_cg76 contributes nothing here: nice.org.uk began returning 403 to
+# programmatic requests, so its 42 auto chunks are gone. Its four HAND-VERIFIED
+# entries under `triggers.adherence_support` are unaffected — which is why "how do
+# I support medication adherence?" is still the HIGHEST in-scope score at 0.622.
+EMBED_FLOOR = 0.407
 
 # Above this, retrieval is confident the passages address the question. Between
 # EMBED_FLOOR and here, they are topically close but may not answer it, and the
 # answer says so.
 #
-# Widened from 0.42 to 0.44. The band 0.405-0.44 holds the five in-scope questions
-# closest to the out-of-scope ceiling: sexual function (0.418), blood pressure
-# monitoring (0.419), the six-month review (0.425), carer support (0.431) and
-# statins (0.436). All five are answered; all five carry the note saying the
-# passages may not address what was asked.
+# Widened from 0.42 to 0.44. The band 0.407-0.44 holds the four in-scope questions
+# closest to the out-of-scope ceiling: sexual function (0.424), the six-month
+# review (0.425), blood pressure monitoring (0.430) and statins (0.435). All four
+# are answered; all four carry the note saying the passages may not address what
+# was asked.
 #
-# Five hedges out of 25 is more than before, and correct: with only 0.026 between
-# the lowest in-scope and highest out-of-scope score, a question in the lower part
-# of the in-scope range is genuinely close to one the retriever would refuse. The
-# hedge costs a sentence. Silent confidence there would cost trust.
+# Four hedges out of 25 is more than the old policy allowed, and correct: with only
+# 0.033 between the lowest in-scope and highest out-of-scope score, a question in
+# the lower part of the in-scope range is genuinely close to one the retriever would
+# refuse. The hedge costs a sentence. Silent confidence there would cost trust.
 EMBED_CONFIDENT = 0.44
 
 # Cosine similarity over TF-IDF systematically favours short documents: with

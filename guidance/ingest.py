@@ -766,9 +766,23 @@ def write(chunks: list[dict], path: Path = OUTPUT) -> None:
     }, indent=1, ensure_ascii=False))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
     from .embeddings import _load_env_for_cli
     _load_env_for_cli()          # see config.py — CLIs must load .env themselves
+
+    parser = argparse.ArgumentParser(
+        prog="python -m guidance.ingest",
+        description="Re-extract auto chunks from the guideline sources. "
+                    "Hand-verified entries under `triggers` are never touched.")
+    parser.add_argument(
+        "--allow-dropped", action="append", default=[], metavar="SOURCE_ID",
+        help="Permit this source to contribute zero chunks. Use only when a "
+             "publisher has permanently blocked programmatic access — the guard "
+             "exists to catch a site redesign silently halving the corpus.")
+    args = parser.parse_args(argv)
+    allow_dropped = set(args.allow_dropped)
 
     documents: dict[str, list[tuple[str, str]]] = {}
     failures: list[str] = []
@@ -844,14 +858,31 @@ def main() -> int:
     # Refuse a run that lost a source which previously contributed. Without this
     # a site redesign quietly halves the corpus and the only symptom is worse
     # answers, which is indistinguishable from the retriever being bad.
+    #
+    # `--allow-dropped ID` is the escape, and it is deliberately awkward: you must
+    # name the source. A publisher who starts blocking programmatic access is a
+    # permanent condition, not a transient failure, and without an escape the guard
+    # would wedge the pipeline forever — at which point the next person disables
+    # the guard entirely, which is much worse than acknowledging one source.
     previous = _previous_counts()
     lost = [sid for sid, was in previous.items()
             if was > 0 and sum(r.chunks for r in reports if r.source_id == sid) == 0]
-    if lost:
-        print(f"\nRefusing to write: {', '.join(lost)} previously contributed "
-              f"chunks and now contributes none. Corpus left as it was.",
+    unacknowledged = [sid for sid in lost if sid not in allow_dropped]
+    if unacknowledged:
+        print(f"\nRefusing to write: {', '.join(unacknowledged)} previously "
+              f"contributed chunks and now contributes none. Corpus left as it "
+              f"was.\n\nIf that source is permanently unreachable, acknowledge it "
+              f"by name:\n"
+              f"    python -m guidance.ingest "
+              f"{' '.join('--allow-dropped ' + s for s in unacknowledged)}\n"
+              f"Hand-verified entries under `triggers` are unaffected either way — "
+              f"only the auto-extracted chunks are lost.",
               file=sys.stderr)
         return 1
+    for sid in lost:
+        print(f"\n⚠ {sid} contributed nothing and was allowed to drop. Its "
+              f"auto-extracted chunks are gone from the corpus; its hand-verified "
+              f"entries under `triggers` are untouched.")
 
     write(chunks)
     total_coarse = sum(r.coarse for r in reports)

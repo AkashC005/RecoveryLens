@@ -144,7 +144,13 @@ def compose_readback(transcript: Transcript) -> str:
     """
     lines = [f'I heard: "{transcript.text.strip()}"']
 
-    if transcript.warnings:
+    # Low confidence no longer refuses the read-back — it warns on it. The human
+    # reading their own words back is a stronger check than the score, so the
+    # score's job is to tell them how carefully to read, not whether they may.
+    if transcript.low_confidence:
+        lines.append("The recording was hard to hear, so please read that back "
+                     "carefully before you confirm it.")
+    elif transcript.warnings:
         # Say plainly that we may have misheard, rather than burying it.
         lines.append("I'm not certain I caught that correctly.")
     elif not transcript.high_confidence:

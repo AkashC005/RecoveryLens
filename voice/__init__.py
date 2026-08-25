@@ -39,6 +39,7 @@ from .confirm import (  # noqa: F401
 )
 from .speech import (  # noqa: F401
     GOOD_CONFIDENCE,
+    MIN_AUDIO_BYTES,
     MIN_CONFIDENCE,
     Audio,
     NullSpeech,
@@ -47,13 +48,15 @@ from .speech import (  # noqa: F401
     Transcript,
     build_speech_provider,
     detect_negation_loss,
+    looks_hallucinated,
     voice_enabled,
 )
 
 __all__ = [
     "Transcript", "Audio", "SpeechProvider", "NullSpeech", "OpenAISpeech",
     "build_speech_provider", "voice_enabled", "detect_negation_loss",
-    "MIN_CONFIDENCE", "GOOD_CONFIDENCE",
+    "MIN_CONFIDENCE", "GOOD_CONFIDENCE", "MIN_AUDIO_BYTES",
+    "looks_hallucinated",
     "ConfirmationState", "is_confirmation", "compose_readback",
     "compose_unusable", "compose_discarded", "compose_escalated_unconfirmed",
     "unconfirmed_escalation_reason", "CONFIRMATION_WINDOW",
