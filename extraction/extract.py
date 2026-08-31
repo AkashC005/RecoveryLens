@@ -77,11 +77,15 @@ FIELD_GUIDE: dict[str, str] = {
     "planned_aspirin": "True if aspirin is prescribed on discharge or planned.",
     "planned_heparin": (
         "none / low / medium. Prophylactic-dose LMWH is low; treatment-dose is "
-        "medium; nothing mentioned is none."),
+        "medium. If the summary does not mention heparin or LMWH at all, OMIT "
+        "this field — silence is not a decision to withhold it."),
     "caregiver_contact": (
         "A phone number for a family member or carer, if the summary gives one. "
         "NOT the hospital's number and NOT the patient's own if it is labelled as "
         "theirs."),
+    "deficit_face": "absent"
+
+    
 }
 
 # Deficits use a three-state answer and the third state carries real prognostic
@@ -95,13 +99,29 @@ DEFICIT_INSTRUCTION = (
     "If the summary simply does not mention a deficit, OMIT the field entirely. "
     "Silence is not the same as absence, and 'absent' is a clinical claim that "
     "someone looked and found nothing."
+    "\n\nA statement that RESTRICTS the deficit to one region is an explicit "
+    "statement about the others. 'Isolated left lower limb weakness', 'weakness "
+    "confined to the right arm', 'power preserved in all four limbs' all mean "
+    "the unmentioned regions were looked at and found normal — mark those "
+    "absent. This is not the same as silence: a summary that simply never "
+    "mentions the face still leaves deficit_face omitted."
 )
+    
+
+
 
 # Never extracted, for different reasons.
 #   patient_ref        an identifier the CLINICIAN chooses; taking it from the
 #                      document would import a real hospital number, which is
 #                      exactly what database.py forbids
 #   caregiver_language a preference nobody records in a discharge summary
+FIELD_TERMS: dict[str, tuple[str, ...]] = {
+    "planned_heparin": ("heparin", "anticoagul", "lmwh", "enoxaparin", "dalteparin", "tinzaparin"),
+    "heparin_last_24h": ("heparin", "anticoagul", "lmwh", "enoxaparin", "dalteparin", "tinzaparin"),
+    "planned_aspirin": ("aspirin", "antiplatelet", "clopidogrel", "dapt"),
+    "aspirin_last_3days": ("aspirin", "antiplatelet", "clopidogrel"),
+    "atrial_fibrillation": ("fibrillation", " af ", "af,", "af.", "irregular", "sinus"),
+}
 EXCLUDED = {"patient_ref", "caregiver_language"}
 EXTRACTABLE_FIELDS = tuple(FIELD_GUIDE)
 
@@ -237,7 +257,9 @@ def _verify(document: str, item: dict, allowed: dict[str, list[str]]
             ) -> tuple[ExtractedField | None, dict | None]:
     """Accept one extracted field, or say why not.
 
-    Four checks, each closing a different way a wrong value reaches the form.
+    Five checks, each closing a different way a wrong value reaches the form.
+    They run cheapest-and-most-specific first, so the reason a clinician sees is
+    the most informative one available.
     """
     name = str(item.get("name", "")).strip()
     source = str(item.get("source", "") or "").strip()
@@ -252,7 +274,9 @@ def _verify(document: str, item: dict, allowed: dict[str, list[str]]
         return None, {"name": name, "value": value,
                       "reason": "no supporting quote given"}
 
-    if _normalise(source) not in _normalise(document):
+    quote = _normalise(source)
+
+    if quote not in _normalise(document):
         # The check that makes the whole design work: an invented value needs an
         # invented quote, and an invented quote is not in the document.
         return None, {"name": name, "value": value, "source": source,
@@ -262,6 +286,19 @@ def _verify(document: str, item: dict, allowed: dict[str, list[str]]
     if options is not None and str(value) not in options:
         return None, {"name": name, "value": value,
                       "reason": f"not one of {', '.join(options)}"}
+
+    terms = FIELD_TERMS.get(name)
+    if terms and not any(t in quote for t in terms):
+        # A real sentence, quoted accurately, attached to a conclusion it does
+        # not license. The check above cannot catch this: it verifies the quote
+        # exists, not that it supports the value. Found in a real run, where
+        # planned_heparin='none' came back citing a sentence about consciousness.
+        #
+        # Runs after the enum check on purpose: a value can fail both, and
+        # "not one of none, low, medium" is more useful than "the quote is off
+        # topic".
+        return None, {"name": name, "value": value, "source": source,
+                      "reason": "quote does not mention the subject of the field"}
 
     if value is None or value == "":
         return None, {"name": name, "reason": "empty value"}
@@ -341,6 +378,12 @@ def _call(system: str, user: str) -> str:
     client = anthropic.Anthropic(api_key=api_key)
     resp = client.messages.create(
         model=_model(), max_tokens=MAX_TOKENS, system=system,
+        # The only quality lever this SDK exposes. temperature, top_p and top_k
+        # are gone, and the API rejects temperature outright for this model, so
+        # extraction cannot be made deterministic. Extraction turns on boundary
+        # readings — whether "isolated left lower limb weakness" excludes the
+        # face — which is exactly where more effort should pay.
+        output_config={"effort": "high"},
         messages=[{"role": "user", "content": user}],
     )
     return "\n".join(b.text for b in resp.content
@@ -360,3 +403,5 @@ def text_from_pdf(data: bytes) -> str:
 
     reader = PdfReader(BytesIO(data))
     return "\n".join((page.extract_text() or "") for page in reader.pages)
+
+

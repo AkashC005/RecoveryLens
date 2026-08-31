@@ -642,12 +642,79 @@ def _messaging_state(p: Patient, db: Session, now) -> MessagingState:
         consent_recorded=bool(p.consent_recorded),
         opted_out=bool(p.opted_out),
         opted_out_at=p.opted_out_at,
+        opt_out_cleared_at=p.opt_out_cleared_at,
+        opt_out_cleared_by=p.opt_out_cleared_by,
+        opt_out_cleared_reason=p.opt_out_cleared_reason,
         last_inbound_at=p.last_inbound_at,
         whatsapp_window_open=window_open,
         whatsapp_window_note=note,
         can_send=bool(decision),
         blocked_reason=decision.reason or None,
     )
+
+
+MIN_CLEAR_REASON = 15
+
+
+class ClearOptOutRequest(BaseModel):
+    """Why a carer's withdrawal is being overridden."""
+    reason: str
+
+
+@app.post("/api/patients/{patient_id}/opt-out/clear",
+          response_model=MessagingState, tags=["patients"])
+def clear_opt_out(patient_id: int, req: ClearOptOutRequest,
+                  db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    """Let a clinician undo an opt-out, on the record.
+
+    This route did not exist, and its absence was itself a bug: `opted_out` is
+    set by any inbound message matching STOP, so a carer who mistypes, or whose
+    relative borrows the phone, was silently and permanently removed from
+    follow-up with no way back. For a WhatsApp keyword in a second language that
+    is not a rare accident.
+
+    It is still the most dangerous route in the app, because the person who
+    benefits from messages resuming is the one deciding the withdrawal did not
+    count. Three things make it defensible rather than a hole:
+
+      1. A reason is MANDATORY and must be long enough to be a sentence. A
+         mandatory free-text field is weak protection, but "I had to type why"
+         is a different decision from clicking a button.
+      2. The clinician's identity and the time are recorded with it.
+      3. `opted_out_at` is left in place, so the record permanently reads
+         "withdrew on X, overridden by Y on Z" and never reverts to looking like
+         a patient who never objected.
+
+    What this deliberately does NOT do is re-record consent. Clearing an opt-out
+    restores the previous state; it does not manufacture a fresh agreement, and
+    if consent was never recorded the send gate still refuses.
+    """
+    patient = scoped_patient(patient_id, user, db)
+
+    if not patient.opted_out:
+        raise HTTPException(400, "This patient has not opted out.")
+
+    reason = (req.reason or "").strip()
+    if len(reason) < MIN_CLEAR_REASON:
+        raise HTTPException(
+            400,
+            f"Give a reason of at least {MIN_CLEAR_REASON} characters. This is "
+            f"an override of a carer's withdrawal and it is recorded against "
+            f"your account.")
+
+    patient.opted_out = False
+    patient.opt_out_cleared_at = utcnow()
+    patient.opt_out_cleared_by = user.email
+    patient.opt_out_cleared_reason = reason
+    db.commit()
+
+    # Printed, not just stored. During a demo this is the one action that should
+    # be visible in the server log without anyone going looking for it.
+    print(f"[opt-out] patient {patient.id} cleared by {user.email}: {reason}")
+
+    db.refresh(patient)
+    return _messaging_state(patient, db, utcnow())
 
 
 @app.get("/api/patients/{patient_id}", response_model=PatientDetail,

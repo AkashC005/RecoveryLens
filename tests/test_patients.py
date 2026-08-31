@@ -329,3 +329,165 @@ def test_assessments_are_newest_first(client, db, org_id):
     dates = [a["created_at"]
              for a in client.get(f"/api/patients/{p.id}").json()["assessments"]]
     assert dates == sorted(dates, reverse=True)
+
+
+# --------------------------------------------------------------- form schema
+# `api/artifacts/schema.json` is written when the models are trained and served
+# verbatim by GET /api/meta/schema. `AssessmentRequest` is the live Pydantic
+# model. Nothing regenerates one from the other, so they drift silently — and
+# the assessment form now fills its selects from the schema, so drift puts an
+# option in front of a clinician that the API rejects when they submit.
+#
+# Asserted against the FILE rather than the endpoint on purpose. The endpoint
+# returns {} in tests, because `predictor.load()` runs in a startup hook and
+# TestClient only fires those as a context manager. Testing through HTTP would
+# have passed vacuously on an empty dict and proved nothing.
+
+import json
+import pathlib
+
+SCHEMA_FILE = pathlib.Path(__file__).resolve().parents[1] / "api" / "artifacts" / "schema.json"
+
+
+def _served_options():
+    """{field name: [legal values]} for every select the schema describes."""
+    payload = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    return {f["name"]: [o["value"] for o in f["options"]]
+            for section in payload["sections"]
+            for f in section["fields"] if f.get("options")}
+
+
+def _model_enums():
+    """{field name: [legal values]} from AssessmentRequest itself."""
+    from api.schemas import AssessmentRequest
+
+    model = AssessmentRequest.model_json_schema()
+    defs = model.get("$defs", {})
+    out = {}
+    for name, spec in model.get("properties", {}).items():
+        for ref in [spec] + spec.get("allOf", []) + spec.get("anyOf", []):
+            target = ref.get("$ref", "")
+            if target.startswith("#/$defs/"):
+                enum = defs.get(target.rsplit("/", 1)[-1], {}).get("enum")
+                if enum:
+                    out[name] = list(enum)
+                    break
+            elif "enum" in ref:
+                out[name] = list(ref["enum"])
+                break
+    return out
+
+
+def test_the_form_never_offers_a_value_the_api_rejects():
+    """The dangerous direction of drift.
+
+    The app presents a choice, the clinician picks it, and the submission fails
+    with a validation error naming a field they filled in correctly.
+    """
+    allowed = _model_enums()
+    for name, options in _served_options().items():
+        assert name in allowed, (
+            f"schema.json gives '{name}' a fixed option list, but "
+            f"AssessmentRequest does not constrain it")
+        extra = sorted(set(options) - set(allowed[name]))
+        assert not extra, f"schema.json offers {extra} for '{name}'; the API rejects them"
+
+
+def test_the_form_can_offer_every_value_the_api_accepts():
+    """The quiet direction.
+
+    Nothing breaks — but a value the model gained and the schema never learned
+    about is unreachable from the UI, so a clinician cannot record a real
+    finding. A silent loss of data rather than a visible error.
+    """
+    served = _served_options()
+    for name, allowed in _model_enums().items():
+        if name not in served:
+            continue
+        missing = sorted(set(allowed) - set(served[name]))
+        assert not missing, (
+            f"AssessmentRequest accepts {missing} for '{name}', which the form "
+            f"has no way to offer")
+
+
+# ------------------------------------------------------------ clearing opt-out
+# The most dangerous route in the app: a clinician deciding a carer's withdrawal
+# did not count. It exists because `opted_out` is set by any inbound message
+# matching STOP, so a mistyped reply removed a family from follow-up forever.
+# These tests pin the three things that make it defensible rather than a hole.
+
+
+def test_clearing_an_opt_out_requires_a_real_reason(client, db, org_id):
+    p = _patient(db, org_id, opted_out=True, consent_recorded=True,
+                 caregiver_contact="+919876543210")
+
+    for bad in ("", "   ", "ok", "mistake"):
+        r = client.post(f"/api/patients/{p.id}/opt-out/clear",
+                        json={"reason": bad})
+        assert r.status_code == 400, f"accepted {bad!r} as a justification"
+
+    db.refresh(p)
+    assert p.opted_out is True, "a rejected request must not clear the flag"
+
+
+def test_clearing_records_who_did_it_and_why(client, db, org_id):
+    p = _patient(db, org_id, opted_out=True, consent_recorded=True,
+                 caregiver_contact="+919876543210")
+
+    reason = "Carer confirmed by phone that STOP was sent by mistake."
+    body = client.post(f"/api/patients/{p.id}/opt-out/clear",
+                       json={"reason": reason}).json()
+
+    db.refresh(p)
+    assert p.opted_out is False
+    assert p.opt_out_cleared_reason == reason
+    assert p.opt_out_cleared_by, "the clinician's identity was not recorded"
+    assert p.opt_out_cleared_at is not None
+    assert body["opted_out"] is False
+    assert body["opt_out_cleared_reason"] == reason
+
+
+def test_the_withdrawal_stays_on_the_record_after_it_is_cleared(client, db, org_id):
+    """The point of the whole design.
+
+    After a clear the patient must never read as someone who simply never
+    objected. `opted_out_at` is the date of the withdrawal and it outlives the
+    withdrawal — a screen showing `opted_out: false` with `opted_out_at` set is
+    showing an override, and that distinction is the audit trail.
+    """
+    from api.database import utcnow
+
+    p = _patient(db, org_id, opted_out=True, opted_out_at=utcnow(),
+                 consent_recorded=True, caregiver_contact="+919876543210")
+
+    client.post(f"/api/patients/{p.id}/opt-out/clear",
+                json={"reason": "Confirmed with the family that this was an error."})
+
+    m = client.get(f"/api/patients/{p.id}").json()["messaging"]
+    assert m["opted_out"] is False
+    assert m["opted_out_at"] is not None, "the withdrawal was erased from the record"
+    assert m["opt_out_cleared_at"] is not None
+
+
+def test_clearing_does_not_manufacture_consent(client, db, org_id):
+    """Restoring the previous state is not the same as a fresh agreement.
+
+    A patient who opted out and never had consent recorded must still be
+    unsendable afterwards. Otherwise this route becomes a way to acquire consent
+    by typing a sentence.
+    """
+    p = _patient(db, org_id, opted_out=True, consent_recorded=False,
+                 caregiver_contact="+919876543210")
+
+    body = client.post(f"/api/patients/{p.id}/opt-out/clear",
+                       json={"reason": "Carer says the STOP was sent in error."}).json()
+
+    assert body["opted_out"] is False
+    assert body["can_send"] is False, "clearing an opt-out granted consent"
+
+
+def test_cannot_clear_an_opt_out_that_never_happened(client, db, org_id):
+    p = _patient(db, org_id, opted_out=False)
+    r = client.post(f"/api/patients/{p.id}/opt-out/clear",
+                    json={"reason": "There is nothing here to clear at all."})
+    assert r.status_code == 400

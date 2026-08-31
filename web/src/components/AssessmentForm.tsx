@@ -9,13 +9,32 @@
  * real clinical answer and carries genuine prognostic weight (14-day mortality
  * among unassessable visual fields is 21.3%, higher than when the deficit is
  * present). Forcing it into yes/no would discard that.
+ *
+ * Where the option values come from
+ * --------------------------------
+ * Every select is filled from GET /api/meta/schema, which serves the model's own
+ * field definitions. The layout, grouping and help text stay here — those are
+ * design decisions the server has no view on — but the legal VALUES are the
+ * predictor's to state. Hardcoding them meant a subtype added to the model, or a
+ * consciousness level renamed, would leave this form offering a value the
+ * predictor rejects, and the clinician seeing a validation error for a choice
+ * the app itself presented.
+ *
+ * The lists below survive as a fallback for when the schema request fails. An
+ * assessment form that will not render because a metadata endpoint is down is a
+ * worse failure than a slightly stale option list, so the form always works. If
+ * the fallback and the server disagree, that is drift, and it is reported to the
+ * console — the fallback is developer-maintained and a stale one is a developer
+ * problem, not something to put in front of a clinician mid-assessment.
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   AssessmentRequest,
   AssessmentResponse,
   DeficitState,
+  FormSchema,
+  SchemaOption,
 } from "../lib/api";
 import { api } from "../lib/api";
 import DischargeSummaryImport from "./DischargeSummaryImport";
@@ -36,6 +55,39 @@ const DEFICIT_OPTIONS: { value: DeficitState; label: string }[] = [
   { value: "present", label: "Present" },
   { value: "cannot_assess", label: "Can't assess" },
 ];
+
+/** Used only when GET /api/meta/schema is unreachable. See the module docstring:
+ *  the server is the source of truth, and these exist so a metadata outage
+ *  degrades the form's freshness rather than its availability. */
+const FALLBACK_OPTIONS: Record<string, SchemaOption[]> = {
+  sex: [
+    { value: "F", label: "Female" },
+    { value: "M", label: "Male" },
+  ],
+  consciousness: [
+    { value: "alert", label: "Fully alert" },
+    { value: "drowsy", label: "Drowsy" },
+    { value: "unconscious", label: "Unconscious" },
+  ],
+  stroke_subtype: [
+    { value: "TACS", label: "TACS — total anterior" },
+    { value: "PACS", label: "PACS — partial anterior" },
+    { value: "LACS", label: "LACS — lacunar" },
+    { value: "POCS", label: "POCS — posterior" },
+    { value: "OTH", label: "Other / unclassified" },
+  ],
+  atrial_fibrillation: [
+    { value: "unknown", label: "Unknown" },
+    { value: "yes", label: "Yes" },
+    { value: "no", label: "No" },
+  ],
+  planned_heparin: [
+    { value: "none", label: "None" },
+    { value: "low", label: "Low dose" },
+    { value: "medium", label: "Medium dose" },
+  ],
+  ...Object.fromEntries(DEFICITS.map((d) => [d.key as string, DEFICIT_OPTIONS])),
+};
 
 const EMPTY: AssessmentRequest = {
   patient_ref: "",
@@ -72,7 +124,7 @@ function Section({ title, help, children }: {
 }) {
   return (
     <fieldset className="card p-5">
-      <legend className="px-2 text-sm font-semibold uppercase tracking-wide text-teal">
+      <legend className="px-2 text-sm font-semibold uppercase tracking-wide text-accent">
         {title}
       </legend>
       {help && <p className="text-sm text-muted mb-4 max-w-prose">{help}</p>}
@@ -92,21 +144,78 @@ function Toggle({ label, checked, onChange }: {
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 rounded border-raised bg-slate accent-teal"
+        className="h-4 w-4 rounded border-line bg-surface accent-accent"
       />
-      <span className="text-sm text-bone">{label}</span>
+      <span className="text-sm text-ink">{label}</span>
     </label>
   );
 }
 
 export default function AssessmentForm({
   onResult,
+  patientId,
+  initial,
 }: {
   onResult: (r: AssessmentResponse) => void;
+  /** Set when updating a patient we already hold. Submits to
+   *  `/api/patients/{id}/assess`, which targets the record by id instead of
+   *  matching on `patient_ref` — see `api.reassess`. */
+  patientId?: number;
+  /** The previous assessment's inputs, so a re-assessment starts from what was
+   *  recorded rather than from an empty form. A clinician re-entering twenty
+   *  unchanged fields to update two will eventually get one of the twenty
+   *  wrong. */
+  initial?: Partial<AssessmentRequest>;
 }) {
-  const [form, setForm] = useState<AssessmentRequest>(EMPTY);
+  const [form, setForm] = useState<AssessmentRequest>(
+    initial ? { ...EMPTY, ...initial } : EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [schema, setSchema] = useState<FormSchema | null>(null);
+
+  // Failure is deliberately swallowed: the form falls back to FALLBACK_OPTIONS
+  // and stays usable. A clinician cannot act on "the metadata endpoint is down".
+  useEffect(() => {
+    api.formSchema().then(setSchema).catch(() => {});
+  }, []);
+
+  const serverOptions = useMemo(() => {
+    const byName = new Map<string, SchemaOption[]>();
+    for (const section of schema?.sections ?? []) {
+      for (const field of section.fields) {
+        if (field.options?.length) byName.set(field.name, field.options);
+      }
+    }
+    return byName;
+  }, [schema]);
+
+  /** The options to render for one field: the server's if we have them.
+   *
+   *  Compares the two lists by value and reports a mismatch, because that is
+   *  precisely the drift this endpoint exists to prevent and it would otherwise
+   *  be invisible — the form would simply start working correctly and the stale
+   *  fallback would sit here until the next outage exposed it. */
+  function optionsFor(name: string): SchemaOption[] {
+    const fallback = FALLBACK_OPTIONS[name] ?? [];
+    const fromServer = serverOptions.get(name);
+    if (!fromServer) return fallback;
+
+    const a = fromServer.map((o) => o.value).join(",");
+    const b = fallback.map((o) => o.value).join(",");
+    if (a !== b) {
+      console.warn(
+        `[AssessmentForm] fallback options for "${name}" are stale: ` +
+        `server has [${a}], this file has [${b}]. Update FALLBACK_OPTIONS.`);
+    }
+    return fromServer;
+  }
+
+  /** Rendered <option> elements for a select. */
+  function optionTags(name: string) {
+    return optionsFor(name).map((o) => (
+      <option key={o.value} value={o.value}>{o.label}</option>
+    ));
+  }
 
   // Fields a model filled in that the clinician has not touched yet, and the
   // sentence each came from. A field leaves this set the moment it is edited —
@@ -134,7 +243,7 @@ export default function AssessmentForm({
     // the input with no class at all and stripped its styling — this helper
     // replaces the className rather than adding to it.
     return {
-      className: source ? "field-input ring-1 ring-amber/50" : "field-input",
+      className: source ? "field-input ring-1 ring-warn/50" : "field-input",
       ...(source
         ? { "data-extracted": "true",
             title: `Read from the summary: "${source}"` }
@@ -153,7 +262,10 @@ export default function AssessmentForm({
         caregiver_contact: form.caregiver_contact || null,
         caregiver_language: form.caregiver_language || "en",
       };
-      onResult(await api.assess(payload));
+      onResult(
+        patientId === undefined
+          ? await api.assess(payload)
+          : await api.reassess(patientId, payload));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -163,6 +275,24 @@ export default function AssessmentForm({
 
   return (
     <form onSubmit={submit} className="space-y-5">
+      {/* Stated, because the two modes produce identical-looking forms and only
+          one of them creates a patient. A clinician who thinks they are adding
+          someone new, and is actually overwriting a record's risk picture, has
+          no way to tell from the fields. */}
+      {patientId !== undefined && (
+        <div className="card border border-accent-soft p-3">
+          <p className="text-sm text-ink">
+            Re-assessing patient #{patientId}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Pre-filled from the last assessment. This adds a new assessment to
+            that record — it does not replace the old one, and the reference
+            below does not decide which patient is updated. Change only what has
+            changed.
+          </p>
+        </div>
+      )}
+
       <DischargeSummaryImport
         onExtracted={(values, result) => {
           setForm((f) => ({ ...f, ...values }));
@@ -172,8 +302,8 @@ export default function AssessmentForm({
       />
 
       {Object.keys(machineFilled).length > 0 && (
-        <div className="card border border-amber/40 p-3">
-          <p className="text-sm text-amber">
+        <div className="card border border-warn/40 p-3">
+          <p className="text-sm text-warn">
             {Object.keys(machineFilled).length} field
             {Object.keys(machineFilled).length === 1 ? "" : "s"} filled from the
             summary and not yet checked.
@@ -203,7 +333,7 @@ export default function AssessmentForm({
               clinician cannot act on. Still not a real name — see below. */}
           <p className="mt-1 text-xs text-muted">
             How this patient appears everywhere in the app. A ward reference or
-            study number — <strong className="text-amber/90">not a real
+            study number — <strong className="text-warn/90">not a real
             name</strong>, since this database holds no clinical governance.
           </p>
         </div>
@@ -222,8 +352,7 @@ export default function AssessmentForm({
             id="sex" value={form.sex} {...extractedProps("sex")}
             onChange={(e) => set("sex", e.target.value as AssessmentRequest["sex"])}
           >
-            <option value="F">Female</option>
-            <option value="M">Male</option>
+            {optionTags("sex")}
           </select>
         </div>
       </Section>
@@ -245,9 +374,7 @@ export default function AssessmentForm({
             {...extractedProps("consciousness")}
             onChange={(e) => set("consciousness", e.target.value as AssessmentRequest["consciousness"])}
           >
-            <option value="alert">Fully alert</option>
-            <option value="drowsy">Drowsy</option>
-            <option value="unconscious">Unconscious</option>
+            {optionTags("consciousness")}
           </select>
         </div>
         <div>
@@ -266,11 +393,7 @@ export default function AssessmentForm({
             {...extractedProps("stroke_subtype")}
             onChange={(e) => set("stroke_subtype", e.target.value as AssessmentRequest["stroke_subtype"])}
           >
-            <option value="TACS">TACS — total anterior</option>
-            <option value="PACS">PACS — partial anterior</option>
-            <option value="LACS">LACS — lacunar</option>
-            <option value="POCS">POCS — posterior</option>
-            <option value="OTH">Other / unclassified</option>
+            {optionTags("stroke_subtype")}
           </select>
         </div>
         <Toggle
@@ -288,7 +411,7 @@ export default function AssessmentForm({
           <div key={key as string}>
             <span className="field-label">{label}</span>
             <div role="radiogroup" aria-label={label} className="flex gap-1">
-              {DEFICIT_OPTIONS.map((opt) => {
+              {optionsFor(key as string).map((opt) => {
                 const active = form[key] === opt.value;
                 return (
                   <button
@@ -297,10 +420,10 @@ export default function AssessmentForm({
                     role="radio"
                     aria-checked={active}
                     onClick={() => set(key, opt.value as never)}
-                    className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${
+                    className={`flex-1 rounded-lg border px-2 py-2 text-xs font-medium transition-all duration-150 ${
                       active
-                        ? "border-teal bg-teal-dim/25 text-bone"
-                        : "border-raised bg-slate text-muted hover:border-teal-dim"
+                        ? "border-accent bg-accent-wash text-accent-strong shadow-card"
+                        : "border-line bg-canvas text-muted hover:border-faint hover:text-ink"
                     }`}
                   >
                     {opt.label}
@@ -319,9 +442,7 @@ export default function AssessmentForm({
             id="af" className="field-input" value={form.atrial_fibrillation}
             onChange={(e) => set("atrial_fibrillation", e.target.value as AssessmentRequest["atrial_fibrillation"])}
           >
-            <option value="unknown">Unknown</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
+            {optionTags("atrial_fibrillation")}
           </select>
         </div>
         <div className="space-y-1">
@@ -343,9 +464,7 @@ export default function AssessmentForm({
             id="hep" className="field-input" value={form.planned_heparin}
             onChange={(e) => set("planned_heparin", e.target.value as AssessmentRequest["planned_heparin"])}
           >
-            <option value="none">None</option>
-            <option value="low">Low dose</option>
-            <option value="medium">Medium dose</option>
+            {optionTags("planned_heparin")}
           </select>
           <div className="mt-2">
             <Toggle label="Aspirin planned" checked={form.planned_aspirin}
@@ -371,6 +490,11 @@ export default function AssessmentForm({
             onChange={(e) => set("caregiver_language",
                                  e.target.value as "en" | "ta" | "hi")}
           >
+            {/* Not from the schema, deliberately. The language a carer is
+                messaged in is a messaging preference, not a model input — the
+                predictor has never heard of it, so /api/meta/schema does not
+                describe it and should not. This list belongs to
+                guidance/translate.py's supported languages instead. */}
             <option value="en">English</option>
             <option value="ta">Tamil — தமிழ்</option>
             <option value="hi">Hindi — हिन्दी</option>
@@ -387,7 +511,7 @@ export default function AssessmentForm({
       </Section>
 
       {error && (
-        <p role="alert" className="text-sm text-signal">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       )}
@@ -395,9 +519,7 @@ export default function AssessmentForm({
       <button
         type="submit"
         disabled={busy}
-        className="w-full rounded-md bg-teal px-4 py-3 text-base font-medium text-ink
-                   transition-colors hover:bg-teal-dim disabled:opacity-50
-                   disabled:cursor-not-allowed sm:w-auto sm:px-8"
+        className="btn-primary w-full text-base sm:w-auto sm:px-10 sm:py-3"
       >
         {busy ? "Assessing…" : "Assess patient"}
       </button>

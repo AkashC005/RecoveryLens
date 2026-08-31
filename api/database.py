@@ -124,6 +124,20 @@ class Patient(Base):
     opted_out = Column(Boolean, default=False, index=True)
     opted_out_at = Column(DateTime, nullable=True)
 
+    # A clinician overriding a withdrawal, recorded permanently.
+    #
+    # `opted_out` going back to False must NEVER make the record look like a
+    # patient who simply never opted out. A carer said stop; someone decided that
+    # did not count. That decision is auditable or it should not be possible, so
+    # these three are written together and `opted_out_at` is deliberately left in
+    # place after a clear — the date of the withdrawal outlives the withdrawal.
+    #
+    # The clinician's EMAIL rather than a user id, on purpose: an audit trail
+    # that stops being readable when a user row is deleted is not an audit trail.
+    opt_out_cleared_at = Column(DateTime, nullable=True)
+    opt_out_cleared_by = Column(String, nullable=True)
+    opt_out_cleared_reason = Column(String, nullable=True)
+
     # Last time this carer sent us anything. WhatsApp only allows free-form
     # messages within 24 hours of it; outside that window, templates only.
     last_inbound_at = Column(DateTime, nullable=True)

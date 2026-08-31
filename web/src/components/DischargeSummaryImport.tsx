@@ -67,11 +67,11 @@ export default function DischargeSummaryImport({
   return (
     <div className="card p-4">
       <div className="flex flex-wrap items-baseline gap-x-3">
-        <p className="text-base text-bone">Start from a discharge summary</p>
+        <p className="text-base text-ink">Start from a discharge summary</p>
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="text-xs text-teal"
+          className="text-xs text-accent"
         >
           {open ? "Hide" : "Paste or upload one"}
         </button>
@@ -96,7 +96,7 @@ export default function DischargeSummaryImport({
               type="button"
               disabled={busy || !text.trim()}
               onClick={() => void run(text, "text/plain")}
-              className="rounded-md border border-teal-dim px-4 py-2 text-sm text-teal
+              className="rounded-md border border-accent-soft px-4 py-2 text-sm text-accent
                          disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? "Reading…" : "Read this summary"}
@@ -106,8 +106,8 @@ export default function DischargeSummaryImport({
               type="button"
               disabled={busy}
               onClick={() => fileInput.current?.click()}
-              className="rounded-md border border-raised px-4 py-2 text-sm text-bone
-                         hover:border-teal-dim disabled:opacity-40"
+              className="rounded-md border border-line px-4 py-2 text-sm text-ink
+                         hover:border-accent-soft disabled:opacity-40"
             >
               Upload a PDF
             </button>
@@ -124,12 +124,12 @@ export default function DischargeSummaryImport({
             />
           </div>
 
-          <p className="text-xs text-muted/80">
+          <p className="text-xs text-faint">
             A photographed or scanned PDF has no text in it to read — paste the
             text instead. Nothing is saved until you submit the form yourself.
           </p>
 
-          {error && <p className="text-sm text-signal">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
 
           {result && <Report result={result} />}
         </div>
@@ -143,8 +143,8 @@ function Report({ result }: { result: Extraction }) {
 
   if (result.error) {
     return (
-      <div className="rounded-md border border-amber/40 p-3">
-        <p className="text-sm text-amber">{result.error}</p>
+      <div className="rounded-md border border-warn/40 p-3">
+        <p className="text-sm text-warn">{result.error}</p>
         <p className="mt-1 text-xs text-muted">
           The form is untouched. Fill it in by hand.
         </p>
@@ -153,9 +153,9 @@ function Report({ result }: { result: Extraction }) {
   }
 
   return (
-    <div className="rounded-md border border-raised p-3" aria-live="polite">
-      <p className="text-sm text-bone">
-        Filled <strong className="text-teal">{result.found_count}</strong> of{" "}
+    <div className="rounded-md border border-line p-3" aria-live="polite">
+      <p className="text-sm text-ink">
+        Filled <strong className="text-accent">{result.found_count}</strong> of{" "}
         {result.extractable_count} fields.{" "}
         <span className="text-muted">
           Please check each one against the summary before submitting.
@@ -165,22 +165,22 @@ function Report({ result }: { result: Extraction }) {
       <button
         type="button"
         onClick={() => setShowSources((v) => !v)}
-        className="mt-2 text-xs text-teal"
+        className="mt-2 text-xs text-accent"
       >
         {showSources ? "Hide what it read" : "Show what it read"}
       </button>
 
       {showSources && (
-        <div className="mt-3 space-y-3 border-l-2 border-raised pl-3">
+        <div className="mt-3 space-y-3 border-l-2 border-line pl-3">
           {result.fields.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Filled from the summary
               </p>
               <ul className="mt-1 space-y-1.5">
                 {result.fields.map((f) => (
                   <li key={f.name} className="text-xs">
-                    <span className="text-bone">
+                    <span className="text-ink">
                       {f.name.replace(/_/g, " ")}: <strong>{String(f.value)}</strong>
                     </span>
                     {/* The quote, verbatim. It was checked against the document
@@ -195,7 +195,7 @@ function Report({ result }: { result: Extraction }) {
 
           {result.rejected.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-amber/90">
+              <p className="text-2xs uppercase tracking-wide text-warn/90">
                 Proposed and refused
               </p>
               <p className="mt-0.5 text-xs text-muted">
@@ -215,7 +215,7 @@ function Report({ result }: { result: Extraction }) {
 
           {result.not_found.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Not in the summary — left blank for you
               </p>
               <p className="mt-1 text-xs text-muted">

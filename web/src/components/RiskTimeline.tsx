@@ -13,7 +13,7 @@
  * available but deliberately quiet.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import type { AssessmentResponse, EnrichedCheckIn, RiskResult } from "../lib/api";
 import { BASIS_META, TIER_LABEL, TIER_STYLES } from "../lib/api";
@@ -74,48 +74,149 @@ function buildEvents(result: AssessmentResponse): TimelineEvent[] {
   return events.sort((a, b) => a.day - b.day || (a.kind === "risks" ? 1 : -1));
 }
 
-function RiskCard({ risk }: { risk: RiskResult }) {
+/** Counts a number up to its target, in step with the bar beside it.
+ *
+ *  Shares the bar's ease-out-cubic so the digits stop at the same instant the
+ *  bar stops moving. Two eased animations of the same value landing at different
+ *  times reads as a bug even when nobody can say why.
+ *
+ *  Returns the target immediately when motion is reduced — the count-up is
+ *  decoration, and the number is the information. */
+function useCountUp(target: number, animate: boolean): number {
+  const [value, setValue] = useState(animate ? 0 : target);
+
+  useEffect(() => {
+    if (!animate) {
+      setValue(target);
+      return;
+    }
+    let frame = 0;
+    const started = performance.now();
+    const DURATION = 700;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - started) / DURATION);
+      setValue(Math.round(target * (1 - Math.pow(1 - t, 3))));
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target, animate]);
+
+  return value;
+}
+
+/** One outcome, as a position on a scale rather than a coloured dot.
+ *
+ * WHY A PERCENTILE BAR AND NOT A GAUGE
+ * ------------------------------------
+ * The models rank; they do not produce calibrated probability. IST-3 validation
+ * showed the ordering transports to a modern cohort and the absolute numbers do
+ * not. A dial pointing at "73%" would claim a precision this system has never
+ * demonstrated, so the bar is explicitly a POSITION AMONG PATIENTS — the axis is
+ * the trial cohort, and it is labelled as such.
+ *
+ * The raw probability stays available and stays quiet, for the same reason.
+ *
+ * `actionability` dims the card rather than hiding it. An exploratory outcome is
+ * still a real output of the model; presenting it identically to an actionable
+ * one would invite someone to act on the weakest thing on the screen.
+ */
+function RiskCard({ risk, index = 0 }: { risk: RiskResult; index?: number }) {
   const style = TIER_STYLES[risk.tier];
+  const reduce = useReducedMotion();
   const dimmed = risk.actionability !== "actionable";
+
+  // Staggered so the eye lands on one bar at a time instead of six moving at
+  // once. Capped, because a sixth card should not wait most of a second.
+  const delay = reduce ? 0 : Math.min(index, 5) * 0.08;
+  const shown = useCountUp(risk.percentile, !reduce);
 
   return (
     <div
-      className={`card p-4 ${dimmed ? "opacity-70" : ""}`}
-      aria-label={`${risk.label}: ${TIER_LABEL[risk.tier]} risk`}
+      className={`card p-5 transition-shadow duration-200 hover:shadow-lift ${
+        dimmed ? "opacity-75" : ""
+      }`}
+      aria-label={`${risk.label}: ${TIER_LABEL[risk.tier]} risk, ${risk.percentile}th percentile`}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-base font-medium text-bone">{risk.label}</p>
-          <p className={`text-sm font-medium ${style.text} mt-0.5`}>
+          <p className="text-base font-semibold text-ink">{risk.label}</p>
+          <span className={`${style.chip} mt-1.5`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden />
             {TIER_LABEL[risk.tier]}
-            <span className="text-muted font-normal">
-              {" "}· {risk.percentile}th percentile
-            </span>
+          </span>
+        </div>
+
+        <div className="shrink-0 text-right">
+          <p className={`tabular text-3xl font-semibold leading-none ${style.text}`}>
+            {shown}
+            <span className="align-super text-sm font-medium">th</span>
+          </p>
+          <p className="mt-1 text-2xs uppercase tracking-widest text-faint">
+            percentile
           </p>
         </div>
-        <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${style.dot}`} />
       </div>
 
-      {risk.actionability !== "actionable" && (
-        <p className="mt-2 text-xs uppercase tracking-wide text-muted">
+      {/* The scale. Quartile ticks give the bar a frame of reference — without
+          them a filled bar is just a coloured rectangle and the reader has no
+          way to judge whether it is long. */}
+      <div className="mt-4">
+        <div className={`relative h-2.5 overflow-hidden rounded-full ${style.track}`}>
+          {[25, 50, 75].map((t) => (
+            <span
+              key={t}
+              aria-hidden
+              className="absolute top-0 z-10 h-full w-px bg-canvas/60"
+              style={{ left: `${t}%` }}
+            />
+          ))}
+          <motion.div
+            className={`h-full rounded-full ${style.bar}`}
+            initial={reduce ? false : { width: 0 }}
+            animate={{ width: `${Math.max(2, Math.min(100, risk.percentile))}%` }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay }}
+          />
+        </div>
+        <div className="mt-1.5 flex justify-between text-2xs text-faint">
+          <span>lower risk</span>
+          {/* Named, not implied. The axis is a 1990s trial population, and a
+              reader who assumes it is "patients like mine today" has been
+              misled by the chart rather than by anything we wrote. */}
+          <span>ranked against the IST-1 cohort</span>
+          <span>higher risk</span>
+        </div>
+      </div>
+
+      {dimmed && (
+        <p className="mt-3 section-label">
           {risk.actionability === "vigilance" ? "Vigilance only" : "Exploratory"}
         </p>
       )}
 
       {risk.drivers.length > 0 && (
-        <ul className="mt-3 space-y-1">
-          {risk.drivers.slice(0, 3).map((d) => (
-            <li key={d.factor} className="text-sm text-muted flex gap-2">
-              <span aria-hidden className={d.direction === "increases" ? "text-amber" : "text-teal"}>
-                {d.direction === "increases" ? "▲" : "▼"}
-              </span>
-              <span>{d.factor}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-4 border-t border-line-soft pt-3">
+          <p className="section-label">What moved this</p>
+          <ul className="mt-2 flex flex-wrap gap-1.5">
+            {risk.drivers.slice(0, 4).map((d) => (
+              <li
+                key={d.factor}
+                className="inline-flex items-center gap-1.5 rounded-md bg-sunken px-2 py-1 text-xs text-ink-soft"
+              >
+                <span
+                  aria-hidden
+                  className={d.direction === "increases" ? "text-warn" : "text-calm"}
+                >
+                  {d.direction === "increases" ? "\u25b2" : "\u25bc"}
+                </span>
+                {d.factor}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      <p className="mt-3 text-xs text-muted/80">{risk.note}</p>
+      <p className="mt-3 text-xs text-muted">{risk.note}</p>
     </div>
   );
 }
@@ -133,40 +234,40 @@ function CheckInCard({ c }: { c: EnrichedCheckIn }) {
   return (
     <div className="mt-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`rounded-full border px-2 py-0.5 text-[11px] ${meta.className}`}>
+        <span className={meta.className}>
           {meta.label}
         </span>
         {c.narrative_mode === "synthesised" && (
-          <span className="text-[11px] text-muted">generated from cited guidance</span>
+          <span className="text-2xs text-muted">generated from cited guidance</span>
         )}
       </div>
 
       {/* Caregiver text leads: this is the message that actually gets sent. */}
-      <p className="mt-2 text-sm text-bone">{c.caregiver_message}</p>
+      <p className="mt-2 text-sm text-ink">{c.caregiver_message}</p>
 
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="mt-2 text-xs text-teal"
+        className="mt-2 text-xs text-accent"
       >
         {open ? "Hide" : "Clinician view and evidence"}
       </button>
 
       {open && (
-        <div className="mt-2 space-y-3 border-l-2 border-raised pl-3">
+        <div className="mt-2 space-y-3 border-l-2 border-line pl-3">
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted">Clinician</p>
+            <p className="section-label">Clinician</p>
             <p className="mt-1 text-sm text-muted">{c.clinician_note}</p>
           </div>
 
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-muted">
+            <p className="section-label">
               Why this day
             </p>
             <p className="mt-1 text-sm text-muted">{c.basis_explained}</p>
             {c.evidence_note && (
-              <p className="mt-1 text-xs text-amber/90">{c.evidence_note}</p>
+              <p className="mt-1 text-xs text-warn/90">{c.evidence_note}</p>
             )}
           </div>
 
@@ -178,15 +279,15 @@ function CheckInCard({ c }: { c: EnrichedCheckIn }) {
                     href={e.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-mono text-xs text-teal hover:underline"
+                    className="font-mono text-xs text-accent hover:underline"
                   >
                     {e.source.short_title} {e.section}
                   </a>
-                  <blockquote className="mt-1 text-sm text-bone">
+                  <blockquote className="mt-1 text-sm text-ink">
                     &ldquo;{e.excerpt}&rdquo;
                   </blockquote>
                   {e.caveat && (
-                    <p className="mt-1 text-xs text-amber/90">{e.caveat}</p>
+                    <p className="mt-1 text-xs text-warn/90">{e.caveat}</p>
                   )}
                 </li>
               ))}
@@ -195,7 +296,7 @@ function CheckInCard({ c }: { c: EnrichedCheckIn }) {
 
           {c.passages.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Retrieved for this patient
               </p>
               <ul className="mt-1 space-y-1">
@@ -205,7 +306,7 @@ function CheckInCard({ c }: { c: EnrichedCheckIn }) {
                       href={p.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="font-mono text-teal hover:underline"
+                      className="font-mono text-accent hover:underline"
                     >
                       {p.source.short_title} {p.section}
                     </a>
@@ -237,7 +338,7 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
   return (
     <section aria-label="Recovery timeline" className="relative">
       <header className="mb-6">
-        <h2 className="text-lg font-semibold text-bone">Recovery timeline</h2>
+        <h2 className="text-lg font-semibold text-ink">Recovery timeline</h2>
         <p className="text-sm text-muted mt-1 max-w-prose">
           Risks are placed at the point in recovery where they matter. Tiers show
           standing relative to comparable patients — not calibrated probability.
@@ -248,7 +349,7 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
         <motion.div
           {...spine}
           style={{ originY: 0 }}
-          className="absolute left-[7px] top-1 bottom-1 w-px bg-teal-dim"
+          className="absolute left-[7px] top-1 bottom-1 w-px bg-accent-soft"
           aria-hidden
         />
 
@@ -263,8 +364,8 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
             >
               <span
                 aria-hidden
-                className={`absolute -left-8 top-1.5 h-3.5 w-3.5 rounded-full border-2 border-ink ${
-                  event.kind === "discharge" ? "bg-bone" : "bg-teal"
+                className={`absolute -left-8 top-1.5 h-3.5 w-3.5 rounded-full border-2 border-canvas shadow-card ${
+                  event.kind === "discharge" ? "bg-ink" : "bg-accent"
                 }`}
               />
 
@@ -272,7 +373,7 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
                 <span className="font-mono text-xs text-muted">
                   {event.day === 0 ? "DAY 0" : `DAY ${event.day}`}
                 </span>
-                <h3 className="text-base font-medium text-bone">{event.title}</h3>
+                <h3 className="text-base font-medium text-ink">{event.title}</h3>
               </div>
 
               {event.detail && (
@@ -283,8 +384,8 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
 
               {event.risks && (
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  {event.risks.map((risk) => (
-                    <RiskCard key={risk.outcome} risk={risk} />
+                  {event.risks.map((risk, n) => (
+                    <RiskCard key={risk.outcome} risk={risk} index={n} />
                   ))}
                 </div>
               )}
@@ -305,7 +406,7 @@ export default function RiskTimeline({ result }: { result: AssessmentResponse })
         />
       )}
 
-      <p className="mt-6 text-xs text-muted/80 max-w-prose">{result.disclaimer}</p>
+      <p className="mt-6 text-xs text-faint max-w-prose">{result.disclaimer}</p>
     </section>
   );
 }

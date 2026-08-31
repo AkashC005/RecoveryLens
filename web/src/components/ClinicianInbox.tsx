@@ -32,7 +32,7 @@ export default function ClinicianInbox({
     api.triageStatus().then(setStatus).catch(() => setStatus(null));
   }, []);
 
-  if (error) return <p className="text-sm text-signal">{error}</p>;
+  if (error) return <p className="text-sm text-danger">{error}</p>;
   if (!rows) return <p className="text-sm text-muted">Loading…</p>;
 
   const sorted = [...rows].sort(
@@ -52,7 +52,7 @@ export default function ClinicianInbox({
       )}
       {status && status.features.triage_agent.enabled && !status.api_key_configured && (
         <div className="card p-3">
-          <p className="text-xs text-amber/90">
+          <p className="text-xs text-warn/90">
             Triage agent is enabled but no API key is configured, so it cannot
             run. Rule checks still apply.
           </p>
@@ -61,7 +61,7 @@ export default function ClinicianInbox({
 
       {sorted.length === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-base text-bone">Nothing awaiting review</p>
+          <p className="text-base text-ink">Nothing awaiting review</p>
           <p className="mt-1 text-sm text-muted">
             Escalated check-ins appear here.
           </p>
@@ -74,19 +74,19 @@ export default function ClinicianInbox({
             return (
               <li key={e.check_in_id} className="card p-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-2 py-0.5 text-xs ${u.className}`}>
+                  <span className={u.className}>
                     {u.label}
                   </span>
                   {onOpenPatient ? (
                     <button
                       type="button"
                       onClick={() => onOpenPatient(e.patient_id)}
-                      className="text-sm text-bone underline decoration-raised underline-offset-4 hover:decoration-teal"
+                      className="text-sm text-ink underline decoration-line underline-offset-4 hover:decoration-accent"
                     >
                       {e.patient_ref || `Patient #${e.patient_id}`}
                     </button>
                   ) : (
-                    <span className="text-sm text-bone">
+                    <span className="text-sm text-ink">
                       {e.patient_ref || `Patient #${e.patient_id}`}
                     </span>
                   )}
@@ -95,10 +95,10 @@ export default function ClinicianInbox({
                   </span>
                 </div>
 
-                <p className="mt-2 text-sm text-bone">{e.reason}</p>
+                <p className="mt-2 text-sm text-ink">{e.reason}</p>
 
                 {note && (
-                  <blockquote className="mt-2 border-l-2 border-teal-dim pl-3 text-sm text-muted">
+                  <blockquote className="mt-2 border-l-2 border-accent-soft pl-3 text-sm text-muted">
                     &ldquo;{note}&rdquo;
                   </blockquote>
                 )}

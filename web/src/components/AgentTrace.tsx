@@ -39,21 +39,21 @@ export default function AgentTrace({
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="text-xs text-teal"
+        className="text-xs text-accent"
       >
         {open ? "Hide reasoning" : labelClosed}
       </button>
 
       {open && (
-        <div className="mt-2 space-y-3 border-l-2 border-raised pl-3">
+        <div className="mt-2 space-y-3 border-l-2 border-line pl-3">
           {t.rule_reasons.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Raised by rule checks
               </p>
               <ul className="mt-1 space-y-0.5">
                 {t.rule_reasons.map((r) => (
-                  <li key={r} className="text-sm text-bone">{r}</li>
+                  <li key={r} className="text-sm text-ink">{r}</li>
                 ))}
               </ul>
             </div>
@@ -61,12 +61,12 @@ export default function AgentTrace({
 
           {t.agent_reasons.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Raised by the triage agent
               </p>
               <ul className="mt-1 space-y-0.5">
                 {t.agent_reasons.map((r) => (
-                  <li key={r} className="text-sm text-bone">{r}</li>
+                  <li key={r} className="text-sm text-ink">{r}</li>
                 ))}
               </ul>
             </div>
@@ -74,7 +74,7 @@ export default function AgentTrace({
 
           {t.agent_summary && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 Agent notes
               </p>
               <p className="mt-1 whitespace-pre-line text-sm text-muted">
@@ -85,14 +85,14 @@ export default function AgentTrace({
 
           {t.tool_calls.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">
+              <p className="section-label">
                 What it checked
               </p>
               <ul className="mt-1 space-y-0.5">
                 {t.tool_calls.map((c, i) => (
                   <li key={i} className="font-mono text-xs text-muted">
                     {c.ok ? "·" : "×"} {c.name}
-                    {c.error && <span className="text-signal"> — {c.error}</span>}
+                    {c.error && <span className="text-danger"> — {c.error}</span>}
                   </li>
                 ))}
               </ul>
@@ -100,7 +100,7 @@ export default function AgentTrace({
           )}
 
           {t.mode === "agent_failed" && (
-            <p className="text-xs text-amber/90">
+            <p className="text-xs text-warn/90">
               The agent could not run ({t.agent_error}). The rule checks above
               still applied — nothing was missed because of this.
             </p>

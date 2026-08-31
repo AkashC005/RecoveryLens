@@ -229,10 +229,10 @@ export interface AssessmentResponse {
  *  look different from `guideline` — the whole point is that a reader can tell
  *  at a glance which check-ins carry published backing and which are ours. */
 export const BASIS_META: Record<IntervalBasis, { label: string; className: string }> = {
-  guideline:        { label: "Guideline-backed", className: "border-teal-dim text-teal" },
-  trial_convention: { label: "Trial convention", className: "border-raised text-muted" },
-  operational:      { label: "Our scheduling",   className: "border-raised text-muted" },
-  unregistered:     { label: "Unregistered",     className: "border-signal/50 text-signal" },
+  guideline:        { label: "Guideline-backed", className: "chip-accent" },
+  trial_convention: { label: "Trial convention", className: "chip-neutral" },
+  operational:      { label: "Our scheduling",   className: "chip-neutral" },
+  unregistered:     { label: "Unregistered",     className: "chip-danger" },
 };
 
 export interface PatientSummary {
@@ -257,7 +257,13 @@ export interface MessagingState {
   contact_hint: string | null;
   consent_recorded: boolean;
   opted_out: boolean;
+  /** When the carer replied STOP. Survives a clinician clearing the opt-out, so
+   *  `opted_out_at` set with `opted_out` false means a withdrawal that was
+   *  OVERRIDDEN — not the absence of one. Render those two states differently. */
   opted_out_at: string | null;
+  opt_out_cleared_at: string | null;
+  opt_out_cleared_by: string | null;
+  opt_out_cleared_reason: string | null;
   last_inbound_at: string | null;
   whatsapp_window_open: boolean;
   whatsapp_window_note: string;
@@ -292,6 +298,36 @@ export interface CheckInRecord {
   triage: TriageRecord | null;
 }
 
+/** Result of POST /api/checkins/{id}/send.
+ *
+ *  Three outcomes share `sent: false` and must not be shown the same way:
+ *
+ *    `reason`  a policy refusal — opted out, no consent, no number, rate
+ *              limited. Returned with HTTP 200 because "we deliberately did not
+ *              send this" is a correct outcome, not a failure. Nothing to fix.
+ *    `error`   the sender was called and the send failed. A real fault, and
+ *              usually ours: bad credentials, unreachable provider.
+ *    neither   should not happen; treat as an error rather than as success.
+ *
+ *  Collapsing these into "it didn't work" would send a clinician looking for a
+ *  bug when the system correctly honoured an opt-out.
+ */
+export interface SendResult {
+  sent: boolean;
+  check_in_id: number;
+  reason?: string | null;
+  channel?: string | null;
+  message_id?: string | null;
+  error?: string | null;
+  /** Exactly what went to the carer, in the language it went in. */
+  preview?: string | null;
+  translation?: { language?: string; [key: string]: unknown } | null;
+  /** Null when the text went out without audio — an enhancement failing is not
+   *  a failed send, and the two are reported separately for that reason. */
+  audio?: Record<string, unknown> | null;
+  media_url?: string | null;
+}
+
 export interface PatientDetail {
   id: number;
   patient_ref: string | null;
@@ -312,22 +348,22 @@ export const CHECKIN_STATUS_META: Record<
 > = {
   completed: {
     label: "Answered",
-    className: "border-teal-dim text-teal",
+    className: "chip-calm",
     hint: "The carer replied and the response was triaged.",
   },
   sent: {
     label: "Awaiting reply",
-    className: "border-amber/40 text-amber",
+    className: "chip-warn",
     hint: "Sent to the carer. No response yet.",
   },
   overdue: {
     label: "Not sent",
-    className: "border-signal/50 text-signal",
+    className: "chip-danger",
     hint: "The date has passed and nothing went out. That is a scheduler or policy problem, not the carer's.",
   },
   scheduled: {
     label: "Scheduled",
-    className: "border-raised text-muted",
+    className: "chip-neutral",
     hint: "Due in the future. Nothing to do yet.",
   },
 };
@@ -426,6 +462,46 @@ export interface Me {
   organisation: string;
 }
 
+// ------------------------------------------------------------- form schema
+/** Mirrors `api/artifacts/schema.json`, served by GET /api/meta/schema.
+ *
+ *  This is the model's own account of what it accepts, written when the models
+ *  were trained. The form uses it for the legal VALUES of every select, so that
+ *  adding a stroke subtype or renaming a consciousness level cannot leave the UI
+ *  offering something the predictor will reject — or worse, silently coerce. */
+export interface SchemaOption {
+  value: string;
+  label: string;
+}
+
+export interface SchemaField {
+  name: string;
+  label: string;
+  /** "number" | "select" | "boolean" | "deficit" — kept open, since an unknown
+   *  type should be ignored by the form rather than crash it. */
+  type: string;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  options?: SchemaOption[];
+}
+
+export interface FormSchema {
+  sections: { title: string; fields: SchemaField[] }[];
+}
+
+/** The account created by POST /api/auth/invite. */
+export interface InvitedUser {
+  id: number;
+  email: string;
+  organisation_id: number;
+}
+
+/** Mirrors api/auth.py. Duplicated because the server does not publish it, and a
+ *  form that only learns the rule from a rejection wastes the typing. If it ever
+ *  changes server-side, the server still wins — this only decides when to warn. */
+export const MIN_PASSWORD_LENGTH = 12;
+
 export const api = {
   health: () => request<{ status: string; models_loaded: number }>("/health"),
 
@@ -451,6 +527,19 @@ export const api = {
     method: "POST",
   }),
 
+  /** Add a colleague to the caller's OWN organisation. There is deliberately no
+   *  route that creates a user in another organisation.
+   *
+   *  Note what this does and does not do: it creates the account outright with a
+   *  password the inviter chooses. Nothing is emailed, and the colleague cannot
+   *  yet change what was set for them — there is no password-change route. The
+   *  UI has to say so rather than implying an invitation was sent. */
+  invite: (email: string, password: string, full_name = "") =>
+    request<InvitedUser>("/api/auth/invite", {
+      method: "POST",
+      body: JSON.stringify({ email, password, full_name }),
+    }),
+
   /** The carer's link for one check-in. Clinician-only to issue. */
   checkInLink: (checkinId: number) =>
     request<{ check_in_id: number; token: string; path: string }>(
@@ -462,6 +551,19 @@ export const api = {
 
   assess: (payload: AssessmentRequest) =>
     request<AssessmentResponse>("/api/assess", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /** Re-assess a patient we already have, targeted by id.
+   *
+   *  `assess()` decides which record to update by matching `patient_ref`, which
+   *  is right at discharge and wrong afterwards: two patients can share a blank
+   *  or duplicated reference, and the match would silently write the new
+   *  assessment onto whichever one it found. When the patient is already known,
+   *  the id removes the guess. */
+  reassess: (patientId: number, payload: AssessmentRequest) =>
+    request<AssessmentResponse>(`/api/patients/${patientId}/assess`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
@@ -481,7 +583,19 @@ export const api = {
    *  with its triage trace, and whether the carer can be messaged at all. */
   patient: (id: number) => request<PatientDetail>(`/api/patients/${id}`),
 
+  /** Override a carer's opt-out. The reason is mandatory server-side and is
+   *  stored against the clinician's account — see MIN_CLEAR_REASON. */
+  clearOptOut: (patientId: number, reason: string) =>
+    request<MessagingState>(`/api/patients/${patientId}/opt-out/clear`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+
   metrics: () => request<Record<string, unknown>>("/api/meta/metrics"),
+
+  /** The model's own field definitions. Backs the option lists in the
+   *  assessment form so the UI cannot drift from what the predictor accepts. */
+  formSchema: () => request<FormSchema>("/api/meta/schema"),
 
   /** Clinician Q&A over the guidance corpus. May legitimately decline. */
   askGuidance: (question: string, top_k = 4) =>
@@ -506,6 +620,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  /** Send one check-in to the carer now.
+   *
+   *  Every policy check runs server-side, in the same `may_send()` gate that
+   *  `MessagingState.can_send` reports. Do not pre-empt it here: a refusal is
+   *  returned as 200 with a reason, so `sent: false` is information to display,
+   *  not an error to throw. */
+  sendCheckIn: (checkinId: number) =>
+    request<SendResult>(`/api/checkins/${checkinId}/send`, { method: "POST" }),
 
   escalations: () => request<Escalation[]>("/api/escalations"),
 
@@ -671,18 +794,41 @@ export interface Escalation {
 }
 
 export const URGENCY_STYLES: Record<Urgency, { label: string; className: string }> = {
-  urgent:  { label: "Urgent",  className: "border-signal/50 text-signal" },
-  soon:    { label: "Soon",    className: "border-amber/40 text-amber" },
-  routine: { label: "Routine", className: "border-raised text-muted" },
+  urgent:  { label: "Urgent",  className: "chip-danger" },
+  soon:    { label: "Soon",    className: "chip-warn" },
+  routine: { label: "Routine", className: "chip-neutral" },
 };
 
 // -------------------------------------------------------------------- tokens
-/** Tier -> colour. Only `elevated` and `high` earn a signal colour. */
-export const TIER_STYLES: Record<Tier, { dot: string; text: string; ring: string }> = {
-  low:      { dot: "bg-muted",  text: "text-muted",  ring: "ring-raised" },
-  moderate: { dot: "bg-teal",   text: "text-teal",   ring: "ring-teal-dim" },
-  elevated: { dot: "bg-amber",  text: "text-amber",  ring: "ring-amber/40" },
-  high:     { dot: "bg-signal", text: "text-signal", ring: "ring-signal/50" },
+/** Tier -> colour.
+ *
+ *  Only `elevated` and `high` earn a signal colour, and `low` is deliberately
+ *  the calm green rather than grey: on a light surface, grey reads as "no data"
+ *  rather than "low risk", and those are opposite meanings on this screen.
+ *
+ *  `bar` and `track` back the risk visualisation; `chip` is the pill class from
+ *  index.css. All four are kept together so a tier cannot pick up one colour in
+ *  one place and another somewhere else. */
+export const TIER_STYLES: Record<
+  Tier,
+  { dot: string; text: string; ring: string; bar: string; track: string; chip: string }
+> = {
+  low: {
+    dot: "bg-calm", text: "text-calm", ring: "ring-calm/25",
+    bar: "bg-calm", track: "bg-calm-soft", chip: "chip-calm",
+  },
+  moderate: {
+    dot: "bg-accent", text: "text-accent", ring: "ring-accent-soft",
+    bar: "bg-accent", track: "bg-accent-soft", chip: "chip-accent",
+  },
+  elevated: {
+    dot: "bg-warn", text: "text-warn", ring: "ring-warn/25",
+    bar: "bg-warn", track: "bg-warn-soft", chip: "chip-warn",
+  },
+  high: {
+    dot: "bg-danger", text: "text-danger", ring: "ring-danger/25",
+    bar: "bg-danger", track: "bg-danger-soft", chip: "chip-danger",
+  },
 };
 
 export const TIER_LABEL: Record<Tier, string> = {

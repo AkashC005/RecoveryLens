@@ -36,7 +36,7 @@ function Toggle({ label, hint, value, onChange }: {
 }) {
   return (
     <div className="card p-4">
-      <p className="text-base text-bone">{label}</p>
+      <p className="text-base text-ink">{label}</p>
       {hint && <p className="mt-0.5 text-sm text-muted">{hint}</p>}
       <div className="mt-3 flex gap-2">
         {[true, false].map((v) => (
@@ -47,8 +47,8 @@ function Toggle({ label, hint, value, onChange }: {
             aria-pressed={value === v}
             className={`rounded-md border px-4 py-2 text-sm transition-colors ${
               value === v
-                ? "border-teal-dim bg-slate text-bone"
-                : "border-raised text-muted hover:text-bone"
+                ? "border-accent-soft bg-surface text-ink"
+                : "border-line text-muted hover:text-ink"
             }`}
           >
             {v ? "Yes" : "No"}
@@ -152,11 +152,11 @@ export default function CaregiverCheckIn({
     const u = URGENCY_STYLES[result.urgency];
     return (
       <div className="card p-6" aria-live="polite">
-        <p className="text-base text-bone">{result.message}</p>
+        <p className="text-base text-ink">{result.message}</p>
 
         {result.escalated && (
           <div className="mt-4">
-            <span className={`rounded-full border px-2 py-0.5 text-xs ${u.className}`}>
+            <span className={u.className}>
               {u.label}
             </span>
             <p className="mt-3 text-sm text-muted">
@@ -172,7 +172,7 @@ export default function CaregiverCheckIn({
 
         <button
           onClick={() => { setResult(null); setFreeText(""); }}
-          className="mt-6 text-sm text-teal"
+          className="mt-6 text-sm text-accent"
         >
           Submit another check-in
         </button>
@@ -180,12 +180,12 @@ export default function CaregiverCheckIn({
     );
   }
 
-  if (error && !due) return <p className="text-sm text-signal">{error}</p>;
+  if (error && !due) return <p className="text-sm text-danger">{error}</p>;
   if (!due) return <p className="text-sm text-muted">Loading…</p>;
   if (due.length === 0)
     return (
       <div className="card p-8 text-center">
-        <p className="text-base text-bone">No check-ins due</p>
+        <p className="text-base text-ink">No check-ins due</p>
         <p className="mt-1 text-sm text-muted">
           Check-ins appear here when they are scheduled.
         </p>
@@ -277,18 +277,17 @@ export default function CaregiverCheckIn({
         }
       />
 
-      {error && <p className="text-sm text-signal">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
 
       <button
         type="submit"
         disabled={busy || selected == null}
-        className="rounded-md border border-teal-dim px-5 py-2.5 text-sm text-teal
-                   disabled:cursor-not-allowed disabled:opacity-40"
+        className="btn-primary"
       >
         {busy ? "Sending…" : "Send check-in"}
       </button>
 
-      <p className="max-w-prose text-xs text-muted/80">
+      <p className="max-w-prose text-xs text-faint">
         This is not a way to get urgent help. If you are worried about them right
         now, contact your doctor or emergency services.
       </p>

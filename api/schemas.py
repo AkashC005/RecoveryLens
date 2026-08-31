@@ -401,7 +401,16 @@ class MessagingState(BaseModel):
                     "preview, where it is actually needed.")
     consent_recorded: bool
     opted_out: bool
-    opted_out_at: datetime | None = None
+    opted_out_at: datetime | None = Field(
+        None,
+        description="When the carer replied STOP. Survives a clinician clearing "
+                    "the opt-out, so `opted_out_at` set with `opted_out` false "
+                    "means a withdrawal that was overridden — not the absence "
+                    "of one.")
+    opt_out_cleared_at: datetime | None = None
+    opt_out_cleared_by: str | None = Field(
+        None, description="Email of the clinician who overrode the withdrawal.")
+    opt_out_cleared_reason: str | None = None
     last_inbound_at: datetime | None = None
     whatsapp_window_open: bool = Field(
         ..., description="True if the carer messaged us within 24h. Outside the "

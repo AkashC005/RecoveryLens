@@ -40,13 +40,13 @@ function Excerpt({ entry }: { entry: GuidanceEntry }) {
   const isPrimary = entry.source.tier === "primary";
 
   return (
-    <li className="border-l-2 border-teal-dim pl-3 py-1">
+    <li className="border-l-2 border-accent-soft pl-3 py-1">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <a
           href={entry.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-mono text-xs text-teal hover:underline"
+          className="font-mono text-xs text-accent hover:underline"
         >
           {entry.source.short_title} {entry.section}
         </a>
@@ -54,7 +54,7 @@ function Excerpt({ entry }: { entry: GuidanceEntry }) {
           <span className="text-xs text-muted">· {entry.heading}</span>
         )}
         {isPrimary && (
-          <span className="rounded-sm bg-raised px-1.5 py-0.5 text-[11px] text-muted">
+          <span className="rounded-sm bg-line px-1.5 py-0.5 text-2xs text-muted">
             {entry.source.jurisdiction} · primary source
           </span>
         )}
@@ -62,12 +62,12 @@ function Excerpt({ entry }: { entry: GuidanceEntry }) {
 
       {/* Quotation marks are not decoration — they mark the boundary of text we
           did not write. */}
-      <blockquote className="mt-1.5 text-sm text-bone">
+      <blockquote className="mt-1.5 text-sm text-ink">
         &ldquo;{entry.excerpt}&rdquo;
       </blockquote>
 
       {entry.caveat && (
-        <p className="mt-1.5 text-xs text-amber/90">
+        <p className="mt-1.5 text-xs text-warn/90">
           <span className="font-medium">Caveat:</span> {entry.caveat}
         </p>
       )}
@@ -91,10 +91,10 @@ function TriggerCard({ block }: { block: GuidanceBlock }) {
         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
       >
         <span className="min-w-0">
-          <span className="block text-sm font-medium text-bone">{block.label}</span>
+          <span className="block text-sm font-medium text-ink">{block.label}</span>
           <span className="mt-0.5 block text-xs text-muted">
             {isGap ? (
-              <span className="text-amber">No guideline recommendation found</span>
+              <span className="text-warn">No guideline recommendation found</span>
             ) : (
               `${block.entry_count} cited ${
                 block.entry_count === 1 ? "recommendation" : "recommendations"
@@ -122,19 +122,19 @@ function TriggerCard({ block }: { block: GuidanceBlock }) {
             transition={reduce ? undefined : { duration: 0.22, ease: "easeOut" }}
             className="overflow-hidden"
           >
-            <div className="border-t border-raised px-4 py-3 space-y-3">
+            <div className="border-t border-line px-4 py-3 space-y-3">
               {/* OUR words. Labelled, muted, unquoted — deliberately unlike an
                   excerpt so attribution is never ambiguous. */}
               {block.plain_summary && (
                 <p className="text-sm text-muted">
-                  <span className="font-medium text-muted/80">RecoveryLens note — </span>
+                  <span className="font-medium text-faint">RecoveryLens note — </span>
                   {block.plain_summary}
                 </p>
               )}
 
               {isGap ? (
-                <div className="rounded-md border border-amber/30 bg-amber/5 p-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-amber">
+                <div className="rounded-md border border-warn/30 bg-warn/5 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-warn">
                     Evidence gap
                   </p>
                   <p className="mt-1.5 text-sm text-muted">{block.evidence_note}</p>
@@ -147,7 +147,7 @@ function TriggerCard({ block }: { block: GuidanceBlock }) {
                     ))}
                   </ul>
                   {block.evidence_note && (
-                    <p className="text-xs text-amber/80">{block.evidence_note}</p>
+                    <p className="text-xs text-warn/80">{block.evidence_note}</p>
                   )}
                 </>
               )}
@@ -184,7 +184,7 @@ function AskBox() {
 
   return (
     <div className="card p-4">
-      <h3 className="text-sm font-medium text-bone">Ask the guidance corpus</h3>
+      <h3 className="text-sm font-medium text-ink">Ask the guidance corpus</h3>
       <p className="mt-1 text-xs text-muted">
         Clinician-facing. Searches the cited guidelines only — it will say so
         when it has nothing relevant rather than guessing.
@@ -201,19 +201,18 @@ function AskBox() {
         <button
           type="submit"
           disabled={busy || !question.trim()}
-          className="rounded-md border border-teal-dim px-4 py-2 text-sm text-teal
-                     disabled:opacity-40 disabled:cursor-not-allowed"
+          className="btn-secondary"
         >
           {busy ? "Searching…" : "Ask"}
         </button>
       </form>
 
-      {error && <p className="mt-3 text-sm text-signal">{error}</p>}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
 
       {result && (
         <div className="mt-4 space-y-3" aria-live="polite">
           {!result.answered ? (
-            <div className="rounded-md border border-raised p-3">
+            <div className="rounded-md border border-line p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-muted">
                 No answer available
               </p>
@@ -230,7 +229,7 @@ function AskBox() {
               </p>
 
               {result.mode === "synthesised" && (
-                <p className="whitespace-pre-line text-sm text-bone">{result.answer}</p>
+                <p className="whitespace-pre-line text-sm text-ink">{result.answer}</p>
               )}
 
               <ul className="space-y-3">
@@ -241,7 +240,7 @@ function AskBox() {
             </>
           )}
 
-          <p className="text-xs text-muted/70">{result.disclaimer}</p>
+          <p className="text-xs text-faint">{result.disclaimer}</p>
         </div>
       )}
     </div>
@@ -269,12 +268,12 @@ function SelectionTrace({ sel }: { sel: GuidanceSelection }) {
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-3 text-left"
       >
-        <span className="text-sm text-bone">{label}</span>
+        <span className="text-sm text-ink">{label}</span>
         <span aria-hidden className={`text-muted transition-transform ${open ? "rotate-90" : ""}`}>›</span>
       </button>
 
       {open && (
-        <div className="mt-3 space-y-3 border-t border-raised pt-3">
+        <div className="mt-3 space-y-3 border-t border-line pt-3">
           {sel.agent_summary && (
             <p className="whitespace-pre-line text-sm text-muted">{sel.agent_summary}</p>
           )}
@@ -282,9 +281,9 @@ function SelectionTrace({ sel }: { sel: GuidanceSelection }) {
           <ul className="space-y-2">
             {sel.selections.map((s) => (
               <li key={s.topic} className="text-sm">
-                <span className="text-bone">{s.topic.replace(/_/g, " ")}</span>
+                <span className="text-ink">{s.topic.replace(/_/g, " ")}</span>
                 {s.source === "rule" && (
-                  <span className="ml-2 rounded-sm bg-raised px-1.5 py-0.5 text-[11px] text-muted">
+                  <span className="ml-2 rounded-sm bg-line px-1.5 py-0.5 text-2xs text-muted">
                     rule
                   </span>
                 )}
@@ -295,7 +294,7 @@ function SelectionTrace({ sel }: { sel: GuidanceSelection }) {
 
           {sel.tool_calls.length > 0 && (
             <div>
-              <p className="text-[11px] uppercase tracking-wide text-muted">What it checked</p>
+              <p className="section-label">What it checked</p>
               <ul className="mt-1">
                 {sel.tool_calls.map((c, i) => (
                   <li key={i} className="font-mono text-xs text-muted">· {c.name}</li>
@@ -305,7 +304,7 @@ function SelectionTrace({ sel }: { sel: GuidanceSelection }) {
           )}
 
           {sel.mode === "agent_failed" && (
-            <p className="text-xs text-amber/90">
+            <p className="text-xs text-warn/90">
               {sel.agent_error} — the deterministic rules still selected guidance,
               so nothing was missed.
             </p>
@@ -325,7 +324,7 @@ export default function GuidancePanel({ bundle, selection }: {
   return (
     <section aria-label="Guidance" className="mt-8 space-y-4">
       <header>
-        <h2 className="text-lg font-semibold text-bone">Guidance</h2>
+        <h2 className="text-lg font-semibold text-ink">Guidance</h2>
         <p className="mt-1 max-w-prose text-sm text-muted">
           Topics chosen for this patient&rsquo;s risk profile and recorded deficits.
           The recommendations themselves are quoted verbatim from published
@@ -338,8 +337,8 @@ export default function GuidancePanel({ bundle, selection }: {
       {/* Drift alarm. Should always be empty; if it is not, the model is emitting
           a trigger the corpus cannot resolve and someone must fix it. */}
       {bundle.unresolved_triggers.length > 0 && (
-        <div className="rounded-md border border-signal/40 bg-signal/5 p-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-signal">
+        <div className="rounded-md border border-danger/40 bg-danger/5 p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-danger">
             Unresolved triggers
           </p>
           <p className="mt-1 text-sm text-muted">
@@ -358,7 +357,7 @@ export default function GuidancePanel({ bundle, selection }: {
       <AskBox />
 
       <details className="card p-4">
-        <summary className="cursor-pointer text-sm font-medium text-bone">
+        <summary className="cursor-pointer text-sm font-medium text-ink">
           Sources ({bundle.sources_cited.length})
         </summary>
         <ul className="mt-3 space-y-2">
@@ -368,12 +367,12 @@ export default function GuidancePanel({ bundle, selection }: {
                 href={s.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-teal hover:underline"
+                className="text-accent hover:underline"
               >
                 {s.short_title}
               </a>
               <span className="text-muted"> — {s.title}</span>
-              <span className="block text-xs text-muted/70">
+              <span className="block text-xs text-faint">
                 {s.publisher}
                 {s.published && ` · ${s.published}`}
                 {s.jurisdiction && ` · ${s.jurisdiction}`}
@@ -384,7 +383,7 @@ export default function GuidancePanel({ bundle, selection }: {
         </ul>
       </details>
 
-      <p className="max-w-prose text-xs text-muted/80">{bundle.disclaimer}</p>
+      <p className="max-w-prose text-xs text-faint">{bundle.disclaimer}</p>
     </section>
   );
 }

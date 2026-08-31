@@ -129,6 +129,21 @@ def test_an_empty_value_is_not_an_extraction(monkeypatch, enabled):
     assert result.fields == []
 
 
+def test_a_legal_value_still_needs_a_quote_about_that_field(monkeypatch, enabled):
+    """The substring check verifies a quote EXISTS, not that it SUPPORTS the value.
+
+    Found in a real run: the model returned planned_heparin='none' for a summary
+    that never mentions heparin, quoting an unrelated sentence verbatim. Legal
+    value, genuine quote, conclusion that does not follow — and every earlier
+    check passes it. This is the gap FIELD_TERMS closes.
+    """
+    _mock(monkeypatch, [{"name": "planned_heparin", "value": "none",
+                         "source": "GCS 13, drowsy"}])
+    result = extract_from_text(SUMMARY)
+
+    assert result.fields == []
+    assert "subject of the field" in result.rejected[0]["reason"]
+
 def test_a_missing_key_leaves_the_form_untouched(monkeypatch, enabled):
     """The most important negative case: no key means a blank form and a stated
     reason, never a partially-guessed one."""

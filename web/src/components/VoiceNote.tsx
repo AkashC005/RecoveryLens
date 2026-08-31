@@ -137,7 +137,7 @@ export default function VoiceNote({
 
   return (
     <div className="card p-4">
-      <p className="text-base text-bone">Or say it out loud</p>
+      <p className="text-base text-ink">Or say it out loud</p>
       <p className="mt-0.5 text-sm text-muted">
         Speak instead of typing. We&rsquo;ll show you what we heard and ask you to
         check it before anything is sent.
@@ -149,8 +149,8 @@ export default function VoiceNote({
           type="button"
           onClick={start}
           disabled={!canRecord}
-          className="mt-3 rounded-md border border-raised px-4 py-2 text-sm text-bone
-                     transition-colors hover:border-teal-dim
+          className="mt-3 rounded-md border border-line px-4 py-2 text-sm text-ink
+                     transition-colors hover:border-accent-soft
                      disabled:cursor-not-allowed disabled:opacity-40"
         >
           Start recording
@@ -160,8 +160,8 @@ export default function VoiceNote({
       {/* -------------------------------------------------------- recording */}
       {phase === "recording" && (
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <span className="flex items-center gap-2 text-sm text-signal">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden />
+          <span className="flex items-center gap-2 text-sm text-danger">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-danger" aria-hidden />
             Recording
           </span>
           <span className="font-mono text-xs text-muted">
@@ -172,7 +172,7 @@ export default function VoiceNote({
           <button
             type="button"
             onClick={stop}
-            className="rounded-md border border-teal-dim px-4 py-2 text-sm text-teal"
+            className="rounded-md border border-accent-soft px-4 py-2 text-sm text-accent"
           >
             Stop
           </button>
@@ -188,19 +188,19 @@ export default function VoiceNote({
       {/* --------------------------------------------------------- read-back */}
       {phase === "readback" && upload && (
         <div className="mt-4" aria-live="polite">
-          <p className="text-[11px] uppercase tracking-wide text-muted">
+          <p className="section-label">
             Is this right?
           </p>
           {/* Verbatim, in quotes, visually distinct. The carer is being asked to
               proofread a machine, so it must be obvious that these are the
               machine's words and not theirs. */}
-          <blockquote className="mt-2 border-l-2 border-teal-dim pl-3 text-base text-bone">
+          <blockquote className="mt-2 border-l-2 border-accent-soft pl-3 text-base text-ink">
             &ldquo;{upload.transcript}&rdquo;
           </blockquote>
 
           {upload.low_confidence && (
-            <div className="mt-3 rounded-md border border-amber/40 p-3">
-              <p className="text-sm text-amber">
+            <div className="mt-3 rounded-md border border-warn/40 p-3">
+              <p className="text-sm text-warn">
                 That recording was hard to hear.
               </p>
               <p className="mt-1 text-xs text-muted">
@@ -211,8 +211,8 @@ export default function VoiceNote({
           )}
 
           {upload.warnings.length > 0 && (
-            <div className="mt-3 rounded-md border border-amber/40 p-3">
-              <p className="text-sm text-amber">
+            <div className="mt-3 rounded-md border border-warn/40 p-3">
+              <p className="text-sm text-warn">
                 Please read that back carefully.
               </p>
               <p className="mt-1 text-xs text-muted">
@@ -222,7 +222,7 @@ export default function VoiceNote({
               </p>
               <ul className="mt-2 space-y-0.5">
                 {upload.warnings.map((w) => (
-                  <li key={w} className="text-xs text-amber/90">{w}</li>
+                  <li key={w} className="text-xs text-warn/90">{w}</li>
                 ))}
               </ul>
             </div>
@@ -232,21 +232,21 @@ export default function VoiceNote({
             <button
               type="button"
               onClick={() => resolve(true)}
-              className="rounded-md border border-teal-dim px-4 py-2 text-sm text-teal"
+              className="rounded-md border border-accent-soft px-4 py-2 text-sm text-accent"
             >
               Yes, that&rsquo;s right
             </button>
             <button
               type="button"
               onClick={() => resolve(false)}
-              className="rounded-md border border-raised px-4 py-2 text-sm text-muted
-                         hover:text-bone"
+              className="rounded-md border border-line px-4 py-2 text-sm text-muted
+                         hover:text-ink"
             >
               No — discard it
             </button>
           </div>
 
-          <p className="mt-3 text-xs text-muted/80">
+          <p className="mt-3 text-xs text-faint">
             Nothing has been sent yet. If you leave this page without checking it,
             a clinician is told a recording exists that we could not verify.
           </p>
@@ -256,12 +256,12 @@ export default function VoiceNote({
       {/* ---------------------------------------------------------- unusable */}
       {phase === "unusable" && upload && (
         <div className="mt-4" aria-live="polite">
-          <p className="text-sm text-bone">{upload.readback}</p>
+          <p className="text-sm text-ink">{upload.readback}</p>
           {/* Distinguishing "we could not hear you" from "voice was never switched
               on" matters: the second is a configuration problem and telling the
               carer to speak more clearly would be a lie. */}
           {!upload.voice_configured && (
-            <p className="mt-2 text-xs text-amber/90">
+            <p className="mt-2 text-xs text-warn/90">
               Voice transcription is not configured on this server
               (RECOVERYLENS_VOICE), so recordings cannot be read. Typing works.
             </p>
@@ -270,7 +270,7 @@ export default function VoiceNote({
             <button
               type="button"
               onClick={() => { setUpload(null); setPhase("idle"); }}
-              className="rounded-md border border-raised px-4 py-2 text-sm text-bone"
+              className="rounded-md border border-line px-4 py-2 text-sm text-ink"
             >
               Try again
             </button>
@@ -278,7 +278,7 @@ export default function VoiceNote({
         </div>
       )}
 
-      {error && <p className="mt-3 text-sm text-signal">{error}</p>}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
     </div>
   );
 }

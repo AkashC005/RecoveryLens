@@ -25,7 +25,8 @@
     "The first run scored 61/61 correct with 6 'spurious' extractions. On",
     "inspection all six were supported by sentences I had failed to label -",
     "the evaluation found errors in the gold set, not in the model. Each is",
-    "justified below."
+    "justified below.",
+    "Second revision (2026-08): deficit_face=absent added to lacs-alert-sinus. The gold set is now FROZEN. Two revisions is the limit — a gold set that keeps agreeing with the model after the fact has stopped being independent of it. Any further disagreement is investigated as a model error first, and a label is only added for a reason that would have been accepted before seeing the run."
   ],
   "cases": [
     {
@@ -73,10 +74,12 @@
         "infarct_visible_on_ct": true,
         "planned_aspirin": true,
         "planned_heparin": "none",
-        "deficit_arm": "absent"
+        "deficit_arm": "absent",
+        "deficit_face": "absent"
       },
       "_justification": {
-        "deficit_arm": "'isolated left lower limb weakness 4/5' - 'isolated' excludes the other limbs. Reading the meaning of a word is comprehension, not inference from what is typical."
+        "deficit_arm": "'isolated left lower limb weakness 4/5' - 'isolated' excludes the other limbs. Reading the meaning of a word is comprehension, not inference from what is typical.",
+        "deficit_face": "'isolated left lower limb weakness 4/5' - the same word that licenses deficit_arm=absent licenses this. Labelling one and not the other was an inconsistency in the gold set, not a difference in the text."
       }
     },
     {
