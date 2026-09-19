@@ -32,12 +32,33 @@ from a message that failed, and both look like the system working.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from datetime import datetime, timedelta, timezone
 import re
 
-# One check-in per patient per 12 hours. The real schedule is days apart, so this
-# only ever fires when something has gone wrong.
-RATE_LIMIT_WINDOW = timedelta(hours=12)
+# One check-in per patient per window. The real schedule is days apart, so this
+# only ever fires when something has gone wrong — a scheduler bug turning into
+# dozens of messages to a worried family.
+#
+# Overridable because a live demonstration needs to send the same patient
+# several messages in a few minutes, and twelve hours makes that impossible.
+# Lowering it is a demo decision, not a product one: the default is what ships,
+# and RECOVERYLENS_RATE_LIMIT_MINUTES is what you set for an hour on a stage.
+_DEFAULT_RATE_LIMIT_MINUTES = 12 * 60
+
+
+def _rate_limit_window() -> timedelta:
+    raw = os.getenv("RECOVERYLENS_RATE_LIMIT_MINUTES", "").strip()
+    try:
+        minutes = int(raw) if raw else _DEFAULT_RATE_LIMIT_MINUTES
+    except ValueError:
+        minutes = _DEFAULT_RATE_LIMIT_MINUTES
+    # Negative or absurd values fall back rather than disabling the guard by
+    # accident. Zero is allowed and means "no rate limit" — explicit, not a typo.
+    return timedelta(minutes=max(0, minutes))
+
+
+RATE_LIMIT_WINDOW = _rate_limit_window()
 
 # Rough sanity check, not validation. Twilio rejects genuinely malformed numbers
 # far better than a regex can; this catches empty strings, placeholder text and
@@ -65,7 +86,7 @@ def looks_like_phone(contact: str | None) -> bool:
 def may_send(*, consent_recorded: bool, contact: str | None,
              opted_out: bool, last_sent_at: datetime | None,
              now: datetime | None = None,
-             window: timedelta = RATE_LIMIT_WINDOW) -> PolicyDecision:
+             window: timedelta | None = None) -> PolicyDecision:
     """The single gate. Order matters — see the module docstring."""
     if opted_out:
         return PolicyDecision(
@@ -78,6 +99,8 @@ def may_send(*, consent_recorded: bool, contact: str | None,
     if not looks_like_phone(contact):
         return PolicyDecision(
             False, f"No usable phone number on record (got {contact!r}).")
+
+    window = window if window is not None else _rate_limit_window()
 
     if last_sent_at is not None:
         now = now or datetime.now(timezone.utc)

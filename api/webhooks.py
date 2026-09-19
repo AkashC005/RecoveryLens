@@ -360,8 +360,32 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db),
     media_url, audio = synthesise_for(
         db, c, body, language=translation.get("language", "en"))
 
-    result = build_sender().send(patient.caregiver_contact, body,
-                                 media_url=media_url)
+    # TWO MESSAGES, NOT ONE WITH A CAPTION.
+    #
+    # Twilio accepts `body` and `media_url` together and most channels render
+    # that as media with a caption. WhatsApp does not do this for AUDIO: an
+    # audio message carries no caption, so the body is silently discarded. The
+    # symptom is exactly what it looks like — the carer receives a voice note in
+    # Tamil and no text at all — and nothing in the send result says so, because
+    # Twilio accepted the message and delivered it.
+    #
+    # So the text goes on its own first, and the spoken companion follows. The
+    # text is the product; the audio is the enhancement, and it must never be
+    # able to take the text down with it. The rate limit was already checked
+    # once above, for this check-in — the pair is one check-in, not two.
+    sender = build_sender()
+    result = sender.send(patient.caregiver_contact, body)
+
+    audio_result = None
+    if result.ok and media_url:
+        audio_result = sender.send(patient.caregiver_contact, "",
+                                   media_url=media_url)
+        if not audio_result.ok:
+            # The carer has the text. Record why they did not get the audio
+            # rather than failing a send that already succeeded.
+            audio = dict(audio or {})
+            audio["delivery_error"] = audio_result.error
+
     if result.ok:
         c.sent_at = utcnow()
         # Recorded on the check-in, not just returned, so the clinician record
@@ -380,6 +404,7 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db),
         "check_in_id": c.id, "preview": body, "translation": translation,
         # Reported separately from `sent` so "delivered as text only" is visible
         # rather than being inferred from the absence of a field.
+        "audio_sent": bool(audio_result and audio_result.ok),
         "audio": audio, "media_url": result.media_url,
     }
 

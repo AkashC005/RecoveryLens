@@ -294,11 +294,9 @@ function RiskGrid({ risks }: { risks: RiskResult[] }) {
  */
 function SendControl({
   c,
-  m,
   onSent,
 }: {
   c: CheckInRecord;
-  m: MessagingState;
   onSent: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -335,12 +333,11 @@ function SendControl({
           {busy ? "Sending…" : c.sent_at ? "Send again" : "Send now"}
         </button>
 
-        {/* A warning, not a lock — see the note above. */}
-        {!m.can_send && m.blocked_reason && !result && (
-          <span className="text-2xs text-warn">
-            Likely to be refused: {m.blocked_reason}
-          </span>
-        )}
+        {/* The pre-emptive "likely to be refused" hint used to sit here. It was
+            noise: the banner at the top of this screen already states whether
+            messages are going out and why not, so this repeated the same
+            sentence beside every check-in. The server still decides, and a real
+            refusal is still shown below after the click. */}
       </div>
 
       {/* Sent. */}
@@ -378,11 +375,9 @@ function SendControl({
 
 function CheckInRow({
   c,
-  m,
   onSent,
 }: {
   c: CheckInRecord;
-  m: MessagingState;
   onSent: () => void;
 }) {
   const meta = CHECKIN_STATUS_META[c.status] ?? CHECKIN_STATUS_META.scheduled;
@@ -422,7 +417,7 @@ function CheckInRow({
 
       <AgentTrace triage={c.triage} labelClosed="How this was triaged" />
 
-      {c.status !== "completed" && <SendControl c={c} m={m} onSent={onSent} />}
+      {c.status !== "completed" && <SendControl c={c} onSent={onSent} />}
 
       {/* The carer's way in. Issued on demand rather than shown by default,
           because the token IS the credential — printing every one on the page
@@ -688,7 +683,7 @@ export default function PatientDetail({
           ) : (
             <ul className="space-y-4">
               {d.check_ins.map((c) => (
-                <CheckInRow key={c.id} c={c} m={d.messaging} onSent={refresh} />
+                <CheckInRow key={c.id} c={c} onSent={refresh} />
               ))}
             </ul>
           )}

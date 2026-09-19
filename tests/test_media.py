@@ -307,3 +307,21 @@ def test_unreachable_media_urls_are_recognised(url, reachable):
     from messaging.sender import _publicly_fetchable
 
     assert _publicly_fetchable(url) is reachable
+
+
+def test_the_spa_catch_all_does_not_swallow_the_media_route(client):
+    """Serving the built frontend added `GET /{path:path}`, which matches
+    everything. FastAPI resolves in declaration order and the media router is
+    included first, so /media wins — but nothing was checking that, and the
+    failure would be invisible in the worst way: Twilio would fetch index.html,
+    get HTML instead of audio, and attach nothing, while the app reported a
+    successful send.
+
+    An unknown token must 404 as JSON from the media route, never 200 as the
+    single-page app.
+    """
+    r = client.get("/media/not-a-real-token")
+
+    assert r.status_code == 404
+    assert "application/json" in r.headers.get("content-type", "")
+    assert "<!doctype html" not in r.text.lower()
