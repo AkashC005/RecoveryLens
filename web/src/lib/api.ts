@@ -6,7 +6,16 @@
  * one more thing to break the night before a demo.
  */
 
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+/** Where the API lives.
+ *
+ *  In development the frontend runs on Vite's port and the API on 8000, so it
+ *  needs an absolute URL. In a production build the API serves these files
+ *  itself, so the right answer is the empty string — a relative path, which
+ *  works on whatever host it is deployed to without being rebuilt for it.
+ *  Hardcoding localhost here meant the built app called localhost from the
+ *  visitor's browser and failed for everyone except the person who built it. */
+const BASE =
+  import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 // --------------------------------------------------------------------- enums
 export type Sex = "M" | "F";
@@ -490,6 +499,65 @@ export interface FormSchema {
   sections: { title: string; fields: SchemaField[] }[];
 }
 
+
+// ------------------------------------------------------------- prescription
+/** One medicine row. Doses are STRINGS: "0.5" and "1/2" are both written on a
+ *  real sheet, and a number type would quietly turn a parse failure into a
+ *  dose. Empty means the cell was blank or refused — never zero. */
+export interface Medication {
+  name: string;
+  qty?: string | null;
+  take?: string | null;
+  morning?: string | null;
+  noon?: string | null;
+  evening?: string | null;
+  night?: string | null;
+  days?: number | null;
+  as_needed?: boolean;
+  /** Derived server-side. Present on a parse result, absent on what you send back. */
+  slots?: string[];
+  schedule_text?: string;
+  schedulable?: boolean;
+}
+
+export interface ParsedPrescription {
+  medications: Medication[];
+  diagnosis: string | null;
+  next_visit: string | null;
+  /** Cells the parser refused, with the reason. Shown, never silently dropped. */
+  rejected: { medicine?: string; field: string; value: string; reason: string }[];
+  warnings: string[];
+  /** `pdf_geometry` was measured from column positions and is reproducible.
+   *  `image_transcription` came from a model reading a photograph and is not.
+   *  The UI must say which — they are not equally trustworthy. */
+  source: "pdf_geometry" | "image_transcription" | string;
+  error: string | null;
+  course_days: number | null;
+  medicine_count: number;
+}
+
+export interface ConfirmedPrescription {
+  prescription_id: number;
+  medicines: number;
+  scheduled_checkins: number;
+  course_days: number;
+  confirmed_by: string;
+  /** Named, not counted: a clinician needs to know WHICH medicines get no
+   *  reminder, not how many. */
+  not_scheduled: string[];
+}
+
+export interface StoredPrescription {
+  id: number;
+  created_at: string;
+  diagnosis: string | null;
+  next_visit: string | null;
+  medications: Medication[];
+  source: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+}
+
 /** The account created by POST /api/auth/invite. */
 export interface InvitedUser {
   id: number;
@@ -590,6 +658,35 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
+
+  /** Read a prescription. Creates nothing.
+   *
+   *  Send a PDF for the deterministic path — doses are assigned to a time of
+   *  day by where they physically sit on the page, so the same file parses the
+   *  same way every time. An image goes to a model instead, because a
+   *  photograph has no geometry to measure; check `source` on the result and
+   *  tell the clinician which they are looking at. */
+  parsePrescription: (body: Blob | ArrayBuffer, contentType: string) =>
+    request<ParsedPrescription>("/api/prescriptions/parse", {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body: body as BodyInit,
+    }),
+
+  /** Save the rows the clinician checked, and schedule the reminders.
+   *  What is stored is what was submitted here — never what the parser returned. */
+  confirmPrescription: (
+    patientId: number,
+    payload: { medications: Medication[]; diagnosis?: string | null;
+               next_visit?: string | null; source?: string },
+  ) =>
+    request<ConfirmedPrescription>(`/api/patients/${patientId}/prescription`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  prescriptions: (patientId: number) =>
+    request<StoredPrescription[]>(`/api/patients/${patientId}/prescriptions`),
 
   metrics: () => request<Record<string, unknown>>("/api/meta/metrics"),
 

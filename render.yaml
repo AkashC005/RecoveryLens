@@ -1,27 +1,58 @@
-# Render deployment blueprint.
+# RecoveryLens on Render — infrastructure as a file, so the deployment is
+# reviewable rather than a sequence of clicks nobody wrote down.
 #
-# Deploy: push to GitHub, then Render dashboard -> New -> Blueprint -> pick this repo.
-#
-# Two things to know about the free tier before demo day:
-#   1. The service sleeps after ~15 minutes idle. The first request after a nap
-#      takes ~30s while it wakes. Warm it up before you present.
-#   2. The filesystem is ephemeral, so SQLite resets on every redeploy. Fine for
-#      a demo; not fine for real patients.
+# NOTHING SECRET IS IN THIS FILE. Every key is `sync: false`, which means Render
+# prompts for it once and stores it encrypted. A key committed to a repository
+# is a key that has been leaked, whatever the repository's visibility.
 
 services:
   - type: web
-    name: recoverylens-api
-    runtime: python
+    name: recoverylens
+    runtime: docker
+    region: singapore          # closest to India — noticeably snappier on the day
+    dockerfilePath: ./Dockerfile
     plan: free
-    region: singapore          # closest to India — lower latency for the demo
-    buildCommand: pip install -r requirements-api.txt
-    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+
     envVars:
-      # Must match the Python that pickled the models closely enough for joblib.
-      - key: PYTHON_VERSION
-        value: "3.12"
-      # Set this to your Vercel URL after the frontend deploys, then redeploy.
-      # Comma-separated, no trailing slash, no wildcard.
+      # --- required for the model-backed features ---
+      # Without these the app still runs: guidance falls back to deterministic
+      # lookup, triage falls back to rules, and extraction is unavailable.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # --- CLOSES THE DOOR ON A PUBLIC URL ---
+      # Registration is open by default, which is right for a laptop and wrong
+      # for a link anyone can find. With this set, an account needs the code.
+      # Set it to something long. This is the single most important variable here.
+      - key: RECOVERYLENS_SIGNUP_CODE
+        sync: false
+
+      # --- messaging: leave unset unless you are demonstrating real sends ---
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+
+      # The background sender stays OFF. A public deployment that starts
+      # messaging families on a timer is not something to switch on the night
+      # before a pitch — send from the UI button instead.
+      - key: RECOVERYLENS_SCHEDULER
+        value: "0"
+
       - key: ALLOWED_ORIGINS
-        value: "http://localhost:5173"
+        value: "https://recoverylens.onrender.com"
+
+      # SQLite on the persistent disk below. Without the disk this file lives on
+      # ephemeral storage and every patient disappears on restart.
+      - key: DATABASE_URL
+        value: "sqlite:////var/data/recoverylens.db"
+
+    disk:
+      name: recoverylens-data
+      mountPath: /var/data
+      sizeGB: 1

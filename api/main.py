@@ -11,9 +11,10 @@ Interactive docs at http://localhost:8000/docs — that page alone is a
 demonstrable artifact before any frontend exists.
 """
 
-from datetime import timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hmac
 import os
+import pathlib
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,8 +38,8 @@ from .triage_tools import DatabaseToolBox
 from .media import router as media_router
 from .webhooks import router as messaging_router
 
-from .database import (Assessment, CheckIn, Patient, SessionLocal, User, get_db,
-                       init_db, utcnow)
+from .database import (Assessment, CheckIn, Patient, Prescription,
+                       SessionLocal, User, get_db, init_db, utcnow)
 from .predictor import predictor
 from .schemas import (AssessmentRecord, AssessmentRequest, AssessmentResponse,
                       CheckInRecord, CheckInResponse, CheckInSubmission,
@@ -133,6 +134,47 @@ def shutdown() -> None:
 
 
 # --------------------------------------------------------------------------- meta
+# ------------------------------------------------------------------ frontend
+# Serving the built frontend from the API makes this ONE process instead of two.
+# That matters for two different reasons: a deployment gets a single service
+# with no cross-origin configuration to get wrong, and a live demo has one thing
+# to start rather than two things to start in the right order.
+#
+# Mounted only if a build exists, so running `uvicorn api.main:app` in a working
+# tree without `npm run build` behaves exactly as it did before.
+_FRONTEND = pathlib.Path(__file__).resolve().parents[1] / "web" / "dist"
+
+
+def _mount_frontend() -> None:
+    if not (_FRONTEND / "index.html").exists():
+        print("[frontend] no build at web/dist — API only. Run: cd web && npm run build")
+        return
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/assets", StaticFiles(directory=_FRONTEND / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str):
+        """Serve a real file if there is one, otherwise index.html.
+
+        The router is client-side, so /patients and /checkin are not files. They
+        must return the app rather than a 404, or a carer opening their check-in
+        link directly gets a blank page.
+
+        Declared AFTER every API route so it cannot shadow one — FastAPI matches
+        in declaration order, and a catch-all registered early would swallow the
+        entire API.
+        """
+        candidate = (_FRONTEND / path).resolve()
+        if path and candidate.is_file() and _FRONTEND.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND / "index.html")
+
+    print(f"[frontend] serving {_FRONTEND}")
+
+
 @app.get("/health", tags=["meta"])
 def health():
     return {
@@ -717,6 +759,163 @@ def clear_opt_out(patient_id: int, req: ClearOptOutRequest,
     return _messaging_state(patient, db, utcnow())
 
 
+# ----------------------------------------------------------------- prescription
+MAX_PRESCRIPTION_BYTES = 6 * 1024 * 1024
+
+
+class ConfirmedMedication(BaseModel):
+    """One medicine row as the CLINICIAN confirmed it.
+
+    Doses are strings, not numbers: "0.5" and "1/2" are both written on real
+    sheets and coercing either to a float loses the difference between half a
+    tablet and a parse failure.
+    """
+    name: str
+    qty: str | None = None
+    take: str | None = None
+    morning: str | None = None
+    noon: str | None = None
+    evening: str | None = None
+    night: str | None = None
+    days: int | None = None
+    as_needed: bool = False
+
+
+class ConfirmPrescription(BaseModel):
+    medications: list[ConfirmedMedication]
+    diagnosis: str | None = None
+    next_visit: date | None = None
+    source: str = "pdf_geometry"
+
+
+@app.post("/api/prescriptions/parse", tags=["prescription"])
+async def parse_prescription(request: Request, user: User = Depends(current_user)):
+    """Read a prescription. Creates NOTHING.
+
+    Two paths, and the difference matters enough to be visible in the response:
+
+      application/pdf  parsed from column geometry. Deterministic — the same
+                       file gives the same answer every time, and a dose is
+                       assigned to a time of day by where it physically sits on
+                       the page rather than by a model's judgement.
+      image/*          transcribed by a model, because a photograph has no
+                       geometry to measure. Flagged, and every value needs
+                       checking against the paper.
+
+    Nothing here is stored. The clinician confirms the rows first — see
+    `POST /api/patients/{id}/prescription`.
+    """
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
+    body = await request.body()
+    if len(body) > MAX_PRESCRIPTION_BYTES:
+        raise HTTPException(413, "File is too large.")
+
+    from prescription import ALLOWED_TYPES, parse_pdf, transcribe_image
+
+    if content_type == "application/pdf":
+        result = parse_pdf(body)
+        # A scan saved as a PDF has no text layer. Say which path to use rather
+        # than showing an empty table.
+        if result.error and "no text layer" in result.error:
+            result.warnings.append(
+                "Upload a photograph of this instead — it will be read, with "
+                "less certainty, by the image path.")
+    elif content_type in ALLOWED_TYPES:
+        result = transcribe_image(body, content_type)
+    else:
+        raise HTTPException(
+            415, f"Send a PDF or an image. Got {content_type or 'nothing'}.")
+
+    return result.to_json()
+
+
+@app.post("/api/patients/{patient_id}/prescription", tags=["prescription"])
+def confirm_prescription(patient_id: int, req: ConfirmPrescription,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    """Save a prescription the clinician has checked, and schedule the reminders.
+
+    The confirmation is the safety mechanism, not a formality. A misread dose is
+    the most dangerous thing this system can produce — worse than a wrong risk
+    tier, which only changes a schedule — so what gets stored is what a named
+    clinician submitted from this endpoint, never what the parser returned.
+
+    Reminders are built ONLY from rows that carry both dose times and a course
+    length. An 'as needed' painkiller has no daily schedule to remind about, and
+    a row whose duration could not be read has no end date, so neither becomes a
+    message. Both stay on the record for the clinician to see.
+    """
+    patient = scoped_patient(patient_id, user, db)
+
+    meds = [m.model_dump() for m in req.medications]
+    if not meds:
+        raise HTTPException(400, "A prescription needs at least one medicine.")
+
+    schedulable = [m for m in meds
+                   if not m["as_needed"] and m.get("days")
+                   and any(m.get(s) for s in ("morning", "noon", "evening", "night"))]
+    course_days = max((m["days"] for m in schedulable), default=0)
+
+    presc = Prescription(
+        patient_id=patient.id,
+        diagnosis=(req.diagnosis or "").strip() or None,
+        next_visit=(datetime.combine(req.next_visit, datetime.min.time())
+                    if req.next_visit else None),
+        medications=meds,
+        source=req.source,
+        confirmed_by=user.email,
+        confirmed_at=utcnow(),
+    )
+    db.add(presc)
+    db.flush()
+
+    # One check-in per prescribed day, asking about yesterday. Day 1 is
+    # tomorrow: there is nothing to ask on the day the course starts.
+    created = 0
+    start = utcnow()
+    for day in range(1, course_days + 1):
+        db.add(CheckIn(
+            patient_id=patient.id,
+            prescription_id=presc.id,
+            kind="medication",
+            scheduled_for=start + timedelta(days=day),
+            reason=f"Medicines, day {day} of {course_days}",
+        ))
+        created += 1
+
+    db.commit()
+    db.refresh(presc)
+
+    return {
+        "prescription_id": presc.id,
+        "medicines": len(meds),
+        "scheduled_checkins": created,
+        "course_days": course_days,
+        "confirmed_by": presc.confirmed_by,
+        # Named rather than counted: a clinician needs to know WHICH medicines
+        # will not be reminded about, not how many.
+        "not_scheduled": [m["name"] for m in meds if m not in schedulable],
+    }
+
+
+@app.get("/api/patients/{patient_id}/prescriptions", tags=["prescription"])
+def list_prescriptions(patient_id: int, db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    """Confirmed prescriptions for one patient, newest first."""
+    patient = scoped_patient(patient_id, user, db)
+    rows = sorted(patient.prescriptions, key=lambda p: p.created_at, reverse=True)
+    return [{
+        "id": p.id,
+        "created_at": p.created_at,
+        "diagnosis": p.diagnosis,
+        "next_visit": p.next_visit,
+        "medications": p.medications or [],
+        "source": p.source,
+        "confirmed_by": p.confirmed_by,
+        "confirmed_at": p.confirmed_at,
+    } for p in rows]
+
+
 @app.get("/api/patients/{patient_id}", response_model=PatientDetail,
          tags=["patients"])
 def get_patient(patient_id: int, db: Session = Depends(get_db),
@@ -950,3 +1149,7 @@ def ai_status():
                  "Guidance excerpts are always verbatim and cited. Agents choose "
                  "and explain; they do not write clinical text."),
     }
+
+
+# Registered last, deliberately: see _mount_frontend.
+_mount_frontend()

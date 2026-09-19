@@ -146,6 +146,8 @@ class Patient(Base):
                                cascade="all, delete-orphan")
     check_ins = relationship("CheckIn", back_populates="patient",
                              cascade="all, delete-orphan")
+    prescriptions = relationship("Prescription", back_populates="patient",
+                                 cascade="all, delete-orphan")
 
 
 class Assessment(Base):
@@ -162,6 +164,50 @@ class Assessment(Base):
     patient = relationship("Patient", back_populates="assessments")
 
 
+class Prescription(Base):
+    """A prescription read off a printout and confirmed by a clinician.
+
+    WHAT IS NOT HERE
+    ----------------
+    No patient name, hospital number, address or prescription number. The
+    parser never reads them (see prescription/parse.py), and there is no column
+    here they could be written to even by mistake. The link to a person is
+    `patient_id`, and that patient is identified by a ward reference the
+    clinician chose.
+
+    `confirmed_by` is not decoration. Nothing here reaches a carer until a
+    clinician has checked every row against the paper, because a misread dose
+    is the most dangerous output this system can produce.
+    """
+
+    __tablename__ = "prescriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), index=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    # Clinical context for the clinician's own screen. Never sent to a carer.
+    diagnosis = Column(String, nullable=True)
+    next_visit = Column(DateTime, nullable=True)
+
+    # The confirmed medicine list: [{name, qty, take, morning, ..., days}].
+    # Stored as JSON rather than a child table because it is written once,
+    # always read whole, and never queried by medicine.
+    medications = Column(JSON, default=list)
+
+    # "pdf_geometry" was parsed deterministically from column positions.
+    # "image_transcription" went through a model and is not reproducible.
+    # Kept so a clinician reviewing later knows which they are looking at.
+    source = Column(String, default="pdf_geometry")
+
+    # Who signed it off, and when. An unconfirmed prescription schedules
+    # nothing — see api/main.py.
+    confirmed_by = Column(String, nullable=True)
+    confirmed_at = Column(DateTime, nullable=True)
+
+    patient = relationship("Patient", back_populates="prescriptions")
+
+
 class CheckIn(Base):
     __tablename__ = "check_ins"
 
@@ -172,6 +218,14 @@ class CheckIn(Base):
     completed_at = Column(DateTime, nullable=True)
 
     reason = Column(String)          # why this check-in exists
+
+    # "symptom" is the original follow-up question set. "medication" asks
+    # whether a prescribed course is being taken. Defaulted rather than made
+    # non-null so every row written before this column existed reads correctly
+    # as what it was.
+    kind = Column(String, default="symptom", index=True)
+    prescription_id = Column(Integer, ForeignKey("prescriptions.id"),
+                             nullable=True, index=True)
     responses = Column(JSON, nullable=True)
     escalated = Column(Boolean, default=False, index=True)
     escalation_reason = Column(String, nullable=True)

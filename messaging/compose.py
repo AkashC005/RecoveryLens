@@ -79,6 +79,55 @@ def compose_checkin(day: int, label: str, caregiver_message: str = "",
     return result.text, result.to_json()
 
 
+def compose_medication_checkin(day: int, course_days: int,
+                               medicines: list[dict],
+                               patient_ref: str | None = None,
+                               language: str | None = None) -> tuple[str, dict]:
+    """One day's medication check-in.
+
+    WHY THE MEDICINES ARE LISTED BACK
+    ---------------------------------
+    "Did you take your tablets?" is answerable by someone who took two of four.
+    Naming them makes the answer mean something, and a carer holding the strip
+    can match what is written here against what is in their hand.
+
+    WHY NO ADVICE IS GIVEN
+    ----------------------
+    This message never tells anyone to take a dose, skip one, double up after a
+    missed one, or stop. It asks a question and reports the answer to a
+    clinician. Dosing advice by SMS from a system that has not seen the patient
+    is the line this product does not cross, and a missed-dose rule that looks
+    helpful — "just take it when you remember" — is wrong for several of the
+    drugs on a stroke discharge sheet.
+
+    The medicine names are RecoveryLens's own rendering of what a clinician
+    confirmed, not quoted guideline text, which is why this can be translated at
+    all. `translate()` refuses anything with retrieved provenance.
+    """
+    who = f" for {patient_ref}" if patient_ref else ""
+    lines = [f"RecoveryLens medicines check{who} — day {day} of {course_days}."]
+
+    listed = []
+    for m in medicines:
+        name = str(m.get("name", "")).strip()
+        if not name:
+            continue
+        when = str(m.get("schedule_text", "")).strip()
+        listed.append(f"• {name} ({when})" if when else f"• {name}")
+    if listed:
+        lines.append("\n".join(listed))
+
+    lines.append("Were all of these taken yesterday?\n"
+                 "Reply YES, or NO and tell us which ones were missed.")
+    lines.append(FOOTER)
+    english = "\n\n".join(lines)
+
+    from guidance.translate import translate
+
+    result = translate(english, language or "en", provenance="generated")
+    return result.text, result.to_json()
+
+
 def compose_confirmation(escalated: bool, urgency: str = "routine") -> str:
     """Sent after a reply is processed.
 

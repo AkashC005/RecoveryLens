@@ -45,9 +45,11 @@ import type {
   PatientDetail as Detail,
   RiskResult,
   SendResult,
+  StoredPrescription,
   Tier,
 } from "../lib/api";
 import AgentTrace from "./AgentTrace";
+import PrescriptionImport from "./PrescriptionImport";
 
 // --------------------------------------------------------------------- pieces
 
@@ -503,11 +505,17 @@ export default function PatientDetail({
 }) {
   const [d, setD] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scripts, setScripts] = useState<StoredPrescription[]>([]);
 
   useEffect(() => {
     setD(null);
     setError(null);
+    setScripts([]);
     api.patient(patientId).then(setD).catch((e) => setError(String(e)));
+    // Failure is swallowed: a patient with no prescriptions and a failed
+    // prescription fetch should both render the same empty section rather than
+    // replacing the whole record with an error.
+    api.prescriptions(patientId).then(setScripts).catch(() => {});
   }, [patientId]);
 
   /** Re-read the record without blanking the screen.
@@ -520,6 +528,7 @@ export default function PatientDetail({
    *  the send succeeded, and that is the fact the clinician needs. */
   function refresh() {
     api.patient(patientId).then(setD).catch(() => {});
+    api.prescriptions(patientId).then(setScripts).catch(() => {});
   }
 
   const back = (
@@ -597,6 +606,71 @@ export default function PatientDetail({
               </div>
             )}
             <InputsPanel a={latest} />
+          </section>
+        )}
+
+        <PrescriptionImport patientId={d.id} onConfirmed={refresh} />
+
+        {scripts.length > 0 && (
+          <section>
+            <div className="mb-3 flex flex-wrap items-baseline gap-x-3">
+              <h3 className="text-sm font-medium text-ink">Confirmed medicines</h3>
+              <span className="text-xs text-muted">
+                {scripts.length} prescription{scripts.length === 1 ? "" : "s"} on file
+              </span>
+            </div>
+            <ul className="space-y-3">
+              {scripts.map((p) => (
+                <li key={p.id} className="card p-4">
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <p className="text-sm font-medium text-ink">
+                      {p.diagnosis || "Prescription"}
+                    </p>
+                    <span className="text-xs text-muted">
+                      {new Date(p.created_at).toLocaleDateString()}
+                    </span>
+                    {/* Provenance survives onto the record, because six months
+                        later nobody remembers whether a row was measured or
+                        read off a photograph. */}
+                    <span className={p.source === "image_transcription"
+                      ? "chip-warn" : "chip-neutral"}>
+                      {p.source === "image_transcription" ? "from a photo" : "from a PDF"}
+                    </span>
+                    {p.next_visit && (
+                      <span className="ml-auto text-xs text-muted">
+                        next visit {new Date(p.next_visit).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+
+                  <ul className="mt-3 space-y-1.5">
+                    {p.medications.map((m, i) => (
+                      <li key={i} className="flex flex-wrap items-baseline gap-x-3 text-sm">
+                        <span className="font-medium text-ink">{m.name}</span>
+                        <span className="text-muted">
+                          {m.schedule_text
+                            || [["morning", m.morning], ["noon", m.noon],
+                                ["evening", m.evening], ["night", m.night]]
+                                 .filter(([, v]) => v)
+                                 .map(([k, v]) => `${v} ${k}`).join(", ")
+                            || (m.as_needed ? "as needed" : "no times given")}
+                        </span>
+                        {m.take && <span className="text-xs text-faint">{m.take}</span>}
+                        {m.days && <span className="text-xs text-faint">{m.days} days</span>}
+                      </li>
+                    ))}
+                  </ul>
+
+                  {p.confirmed_by && (
+                    <p className="mt-3 border-t border-line-soft pt-2 text-xs text-muted">
+                      Checked against the printout and confirmed by {p.confirmed_by}
+                      {p.confirmed_at &&
+                        ` on ${new Date(p.confirmed_at).toLocaleString()}`}.
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 

@@ -1,0 +1,14 @@
+# Development only. Not needed to run the service, and deliberately not in
+# requirements.txt — nothing here is imported by anything the API serves, so it
+# has no business in the deployment image.
+#
+#   pip install -r requirements-dev.txt
+#
+# reportlab draws the synthetic prescription fixtures:
+#   python -m prescription.testdata.make_synthetic
+#
+# The fixtures exist because the layout this feature parses was taken from a
+# real clinic printout carrying a patient's name, hospital number and a
+# surgeon's registration number. That document is not in this repository and
+# must not be. The parser is developed against invented patients instead.
+reportlab==5.0.1

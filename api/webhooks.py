@@ -27,6 +27,7 @@ logged, because a stream of them means something is misconfigured.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 import os
 
@@ -336,10 +337,18 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db),
     if not decision:
         return {"sent": False, "reason": decision.reason, "check_in_id": c.id}
 
-    body, translation = compose_checkin(
-        day=_day_of(c), label=c.reason or "Check-in",
-        caregiver_message=_caregiver_text(c), patient_ref=patient.patient_ref,
-        language=patient.language or "en")
+    # Two kinds of check-in, two messages. A medication round lists the
+    # confirmed medicines and asks whether they were taken; the symptom
+    # check-in asks the follow-up questions. Sending the symptom text for a
+    # medication round would ask a carer about weakness and dizziness on a day
+    # the system meant to ask about tablets.
+    if (c.kind or "symptom") == "medication":
+        body, translation = _compose_medication_message(c, patient, db)
+    else:
+        body, translation = compose_checkin(
+            day=_day_of(c), label=c.reason or "Check-in",
+            caregiver_message=_caregiver_text(c), patient_ref=patient.patient_ref,
+            language=patient.language or "en")
 
     # Audio companion. Generated AFTER translation so the carer hears their own
     # language, and treated as an enhancement throughout: every failure path here
@@ -373,6 +382,51 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db),
         # rather than being inferred from the absence of a field.
         "audio": audio, "media_url": result.media_url,
     }
+
+
+
+def _compose_medication_message(c: CheckIn, patient, db) -> tuple[str, dict]:
+    """The medicines message for one day of a course.
+
+    Reads the medicine list from the CONFIRMED prescription, never from a parse
+    result — what goes to a family is what a clinician signed off.
+
+    Rows that carry no daily schedule are left out of the message: an 'as
+    needed' painkiller is not something to ask "did you take it yesterday"
+    about, and a row whose course length could not be read has no day count to
+    place it in. They stay on the clinician's record either way.
+    """
+    from messaging import compose_medication_checkin
+    from api.database import Prescription
+
+    presc = (db.query(Prescription)
+             .filter(Prescription.id == c.prescription_id).first()
+             if c.prescription_id else None)
+
+    meds: list[dict] = []
+    course_days = 0
+    if presc:
+        for m in presc.medications or []:
+            if m.get("as_needed") or not m.get("days"):
+                continue
+            if not any(m.get(slot) for slot in ("morning", "noon", "evening", "night")):
+                continue
+            parts = [f"{m[slot]} {slot}" for slot in ("morning", "noon", "evening", "night")
+                     if m.get(slot)]
+            meds.append({"name": m.get("name", ""), "schedule_text": ", ".join(parts)})
+            course_days = max(course_days, int(m["days"]))
+
+    # Parsed back out of the stored reason rather than recomputed: the reason
+    # string is what the clinician saw when the course was confirmed, and the
+    # message must agree with it.
+    day = 1
+    match = re.search(r"day (\d+) of (\d+)", c.reason or "", re.I)
+    if match:
+        day, course_days = int(match.group(1)), int(match.group(2))
+
+    return compose_medication_checkin(
+        day=day, course_days=course_days or day, medicines=meds,
+        patient_ref=patient.patient_ref, language=patient.language or "en")
 
 
 def record_voice_note(checkin: CheckIn, audio: bytes, mime_type: str,

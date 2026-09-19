@@ -1,0 +1,14 @@
+.venv/
+.venv-*/
+**/__pycache__/
+**/*.pyc
+web/node_modules/
+web/dist/
+.git/
+.env
+*.db
+ml/data/
+outputs/
+*.pptx
+*.pdf
+!prescription/testdata/*.pdf

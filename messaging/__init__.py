@@ -17,6 +17,7 @@ so there is no path where a missing env var results in real messages going out.
 """
 
 from .compose import (  # noqa: F401
+    compose_medication_checkin,
     compose_checkin,
     compose_confirmation,
     compose_stop_confirmation,
@@ -34,7 +35,8 @@ from .sender import (  # noqa: F401
 )
 
 __all__ = [
-    "compose_checkin", "compose_confirmation", "compose_stop_confirmation",
+    "compose_checkin", "compose_medication_checkin",
+    "compose_confirmation", "compose_stop_confirmation",
     "parse_reply", "ParsedReply",
     "may_send", "PolicyDecision", "looks_like_phone",
     "Sender", "ConsoleSender", "TwilioSender", "SendResult",

@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# RecoveryLens launcher.
+#
+# Double-clicking this starts the API (which also serves the built frontend)
+# and opens a browser at it. Closing the Terminal window stops the server.
+#
+# WHY IT CHECKS BEFORE IT STARTS
+# ------------------------------
+# The three ways this fails are a missing virtualenv, a missing frontend build,
+# and port 8000 already in use from an earlier run. Each produces a blank page
+# or a confusing error several seconds later, which is exactly what you do not
+# want to be debugging in front of a jury. So each is checked first and named.
+
+set -uo pipefail
+
+# The project lives two levels up from Contents/MacOS, unless this bundle was
+# moved — in which case RECOVERYLENS_HOME wins.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${RECOVERYLENS_HOME:-$(cd "$HERE/../../.." && pwd)}"
+PORT="${RECOVERYLENS_PORT:-8000}"
+
+cd "$ROOT" || { echo "Cannot find the project at $ROOT"; read -r; exit 1; }
+
+echo "RecoveryLens"
+echo "============"
+echo "Project: $ROOT"
+echo
+
+if [ ! -x ".venv/bin/python" ]; then
+  echo "No virtualenv at .venv."
+  echo "Run this once, then try again:"
+  echo "    cd \"$ROOT\""
+  echo "    python3.12 -m venv .venv && ./.venv/bin/pip install -r requirements.txt"
+  echo
+  echo "Press return to close."
+  read -r
+  exit 1
+fi
+
+if [ ! -f "web/dist/index.html" ]; then
+  echo "The frontend has not been built, so there is nothing to serve."
+  echo "Run this once, then try again:"
+  echo "    cd \"$ROOT/web\" && npm install && npm run build"
+  echo
+  echo "Press return to close."
+  read -r
+  exit 1
+fi
+
+# A server already listening is almost always a previous run that was never
+# stopped. Say so rather than failing with 'address already in use'.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Something is already using port $PORT."
+  echo "If that is an earlier RecoveryLens, open it at http://localhost:$PORT"
+  echo "or stop it with:  lsof -ti:$PORT | xargs kill"
+  echo
+  open "http://localhost:$PORT" 2>/dev/null
+  echo "Press return to close."
+  read -r
+  exit 0
+fi
+
+echo "Starting the server…"
+./.venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port "$PORT" &
+SERVER=$!
+
+# Stop the server when this window closes, rather than leaving it running and
+# holding the port for the next launch.
+trap 'kill $SERVER 2>/dev/null' EXIT INT TERM
+
+# Wait for it to answer before opening a browser: opening too early shows a
+# connection error and people reload at exactly the wrong moment.
+for _ in $(seq 1 60); do
+  if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+
+if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+  echo
+  echo "Ready at http://localhost:$PORT"
+  echo "Close this window to stop the server."
+  open "http://localhost:$PORT"
+else
+  echo
+  echo "The server did not come up in 30 seconds. The log is above."
+fi
+
+wait $SERVER

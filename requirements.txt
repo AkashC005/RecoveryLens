@@ -41,3 +41,14 @@ openai==3.5.0
 pypdf==6.16.2
 python-multipart==0.0.32
 voyageai==0.5.0
+
+# Prescription capture. pdfplumber gives every word an x-coordinate, which is
+# how the medicine table's dose columns are recovered — see prescription/parse.py.
+# RUNTIME, not optional: without it, uploading a prescription 500s.
+pdfplumber==0.11.10
+
+# config.py imports this directly. It currently arrives only as a transitive
+# dependency of uvicorn[standard] — which works right up until uvicorn changes
+# its extras, and then the app cannot read .env at all. A package you import is
+# a package you pin.
+python-dotenv==1.2.3

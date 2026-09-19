@@ -1,46 +1,10 @@
-# RecoveryLens API — pinned for deployment.
+# Superseded — kept only so an older deploy config pointing here still works.
 #
-# scikit-learn is pinned to the version that PICKLED the models. Loading a
-# pickle under a different minor version produces an InconsistentVersionWarning
-# and, per sklearn's own docs, "may lead to invalid results" — silently. If you
-# retrain, change this pin to match.
-scikit-learn==1.8.0
-
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-sqlalchemy==2.0.36
-pydantic==2.10.3
-
-pandas==2.2.3
-numpy==2.1.3
-joblib==1.4.2
-shap==0.46.0
-
-# Generation step of the clinician Q&A retriever (guidance/retrieval.py).
-# Only used when RECOVERYLENS_LLM_SYNTHESIS=1 and ANTHROPIC_API_KEY is set;
-# without both, the retriever returns passages verbatim and this is dead weight
-# (~2MB, so leaving it installed costs nothing on the 512MB tier).
-# Retrieval itself uses scikit-learn TF-IDF — no torch, no faiss.
-anthropic==0.40.0
-
-# Loads .env at import so the feature flags and API key persist across
-# terminals. api/__init__.py has a minimal fallback parser if this is absent,
-# so a missing install degrades rather than silently disabling every agent.
-python-dotenv==1.0.1
-
-# WhatsApp/SMS delivery and inbound signature validation. Imported lazily, so
-# the app runs without it — build_sender() falls back to ConsoleSender and the
-# webhook refuses to accept unsigned requests rather than trusting them.
-twilio==9.3.7
-
-# Text extraction for the one PDF source (the ISA consensus statement) in
-# guidance/ingest.py. Imported inside the function, so a missing install skips
-# that single source and the other four still ingest — ISA is worth less than
-# NICE and RCP here and must not be able to fail the whole run.
-# Not needed at runtime: ingestion is an offline step that produces corpus.json.
-pypdf==6.0.0
-
-# Background sending of scheduled check-ins (messaging/scheduler.py).
-# Only starts when RECOVERYLENS_SCHEDULER=1; a missing install logs and is
-# skipped rather than failing startup.
-apscheduler==3.11.0
+# This used to be a hand-maintained subset of requirements.txt for the API-only
+# Render service. It drifted: by September 2026 it was missing pdfplumber,
+# openai, httpx, voyageai and python-multipart, and still pinned anthropic
+# 0.40.0 against code written for 1.x. A build from it would have succeeded and
+# then failed at runtime, which is the worst of both.
+#
+# One list, verified from a clean virtualenv. See requirements.txt.
+-r requirements.txt
