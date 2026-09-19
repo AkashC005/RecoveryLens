@@ -42,7 +42,11 @@ COPY triage/ ./triage/
 COPY voice/ ./voice/
 COPY extraction/ ./extraction/
 COPY prescription/ ./prescription/
-COPY conftest.py ./
+# Root-level modules. config.py loads .env and is imported by api/__init__.py,
+# guidance/__init__.py and guidance/embeddings.py — copying only the packages
+# built an image that failed at import with ModuleNotFoundError: 'config',
+# after a clean build and a green push.
+COPY config.py conftest.py ./
 COPY --from=web /web/dist ./web/dist
 
 # Render (and most hosts) inject PORT. Defaulted so the image also runs locally
@@ -51,7 +55,7 @@ COPY --from=web /web/dist ./web/dist
 # shipping an image that dies on its first health check.
 RUN python -c "\
 import pathlib, sys; \
-missing = [p for p in ['models/final_death_14d.pkl', 'api/artifacts/schema.json', \
+missing = [p for p in ['config.py', 'models/final_death_14d.pkl', 'api/artifacts/schema.json', \
                        'api/artifacts/thresholds.json', 'guidance/corpus.json', \
                        'web/dist/index.html'] if not pathlib.Path(p).exists()]; \
 sys.exit('missing from the image: ' + ', '.join(missing)) if missing else print('startup files present')"
