@@ -521,8 +521,14 @@ def _run_assessment(req: AssessmentRequest, db: Session,
             patient.consent_recorded = True
         if req.caregiver_language:
             patient.language = req.caregiver_language
+        # A re-assessment re-plans the SYMPTOM follow-up, so the old unanswered
+        # symptom check-ins go. Medication rounds are not part of that schedule
+        # — they come from a prescription a clinician confirmed, and they run
+        # for the length of the course regardless of how the risk picture
+        # changes. Deleting them here silently cancelled a drug course every
+        # time someone corrected a typo in the assessment.
         for existing in list(patient.check_ins):
-            if existing.completed_at is None:
+            if existing.completed_at is None and (existing.kind or "symptom") == "symptom":
                 db.delete(existing)
 
     assessment = Assessment(

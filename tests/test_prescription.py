@@ -274,3 +274,57 @@ def test_the_carer_message_lists_medicines_and_gives_no_dosing_advice():
                       "you should take", "increase", "reduce the dose"):
         assert forbidden not in body.lower(), f"dosing advice leaked: {forbidden!r}"
     assert "STOP" in body, "the opt-out instruction is missing"
+
+
+def test_reassessing_does_not_cancel_a_medication_course(client, db, org_id):
+    """Re-planning the risk follow-up must not silently stop the tablets.
+
+    `_run_assessment` clears unanswered check-ins so a new risk picture gets a
+    fresh schedule. Medication rounds are not part of that schedule — they come
+    from a prescription a clinician signed off and run for the length of the
+    course. Before this was fixed, correcting a typo in an assessment cancelled
+    the drug reminders with no message to anyone.
+    """
+    from api.database import CheckIn, Patient
+    from api.predictor import predictor
+
+    # The assess route needs the models. `predictor.load()` normally runs in the
+    # startup hook, which TestClient only fires as a context manager — so every
+    # other test in the suite avoids this route entirely. Load it here rather
+    # than skip, because the behaviour under test only exists on this path.
+    if not predictor.loaded:
+        try:
+            predictor.load()
+        except Exception as exc:
+            # Also catches the pickle protocol mismatch you get when the models
+            # were fitted on a different Python than the one running the tests.
+            pytest.skip(f"predictor unavailable here ({type(exc).__name__})")
+
+    p = Patient(organisation_id=org_id, patient_ref="WARD-RX")
+    db.add(p)
+    db.commit()
+
+    client.post(f"/api/patients/{p.id}/prescription", json={
+        "medications": [{"name": "CEFVIL 200 TAB", "morning": "1", "night": "1", "days": 3}]})
+
+    before = db.query(CheckIn).filter(CheckIn.patient_id == p.id,
+                                      CheckIn.kind == "medication").count()
+    assert before == 3
+
+    r = client.post(f"/api/patients/{p.id}/assess", json={
+        "patient_ref": "WARD-RX", "age": 70, "sex": "F", "hours_since_onset": 6,
+        "consciousness": "alert", "systolic_bp": 150, "stroke_subtype": "PACS",
+        "symptoms_on_waking": False,
+        "deficit_face": "absent", "deficit_arm": "absent", "deficit_leg": "absent",
+        "deficit_speech": "absent", "deficit_visual_field": "absent",
+        "deficit_visuospatial": "absent", "deficit_brainstem": "absent",
+        "deficit_other": "absent",
+        "atrial_fibrillation": "unknown", "ct_before_treatment": False,
+        "infarct_visible_on_ct": False, "heparin_last_24h": False,
+        "aspirin_last_3days": False, "planned_aspirin": False,
+        "planned_heparin": "none"})
+    assert r.status_code == 200, r.text
+
+    after = db.query(CheckIn).filter(CheckIn.patient_id == p.id,
+                                     CheckIn.kind == "medication").count()
+    assert after == 3, "re-assessing cancelled the medication course"
