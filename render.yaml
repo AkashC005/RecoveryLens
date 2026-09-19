@@ -47,12 +47,29 @@ services:
       - key: ALLOWED_ORIGINS
         value: "https://recoverylens.onrender.com"
 
-      # SQLite on the persistent disk below. Without the disk this file lives on
-      # ephemeral storage and every patient disappears on restart.
-      - key: DATABASE_URL
-        value: "sqlite:////var/data/recoverylens.db"
-
-    disk:
-      name: recoverylens-data
-      mountPath: /var/data
-      sizeGB: 1
+# ---------------------------------------------------------------- persistence
+# THERE IS NO PERSISTENT DISK HERE, because Render's free tier does not allow
+# one. The database is a SQLite file inside the container, so it is wiped on
+# every restart — and a free instance restarts when it wakes from sleep, not
+# only when you redeploy.
+#
+# WHAT THAT MEANS ON THE DAY: a patient created during a rehearsal at 10:00 is
+# gone by 11:00 if the service napped in between. Create your demo data in the
+# same sitting you present it. That is what you would do anyway.
+#
+# TO MAKE IT PERSIST, pick one:
+#
+#   1. Paid instance + disk ($7/month, cancel after the finale). Change
+#      `plan: free` to `plan: starter` above, then add:
+#
+#        disk:
+#          name: recoverylens-data
+#          mountPath: /var/data
+#          sizeGB: 1
+#
+#      and set DATABASE_URL to sqlite:////var/data/recoverylens.db
+#      This also stops the instance sleeping, which is the other free-tier problem.
+#
+#   2. Render's free Postgres. Persists, costs nothing, but needs
+#      psycopg2-binary added to requirements.txt and the whole app re-tested
+#      against Postgres. Do NOT attempt this on the day of a pitch.

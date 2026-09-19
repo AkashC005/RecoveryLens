@@ -209,10 +209,18 @@ Have both open before you walk up. Switching costs you one sentence.
 
 ## Things that will bite you
 
-**The database resets on redeploy** unless the disk in `render.yaml` attached
-properly. Check: **Service → Disks** should show `recoverylens-data` mounted at
-`/var/data`. Without it SQLite lives on ephemeral storage and every patient
-disappears on restart.
+**The database does not persist.** Render's free tier does not allow a
+persistent disk, so the SQLite file lives inside the container and is wiped
+whenever the service restarts — including when it wakes from sleep, not just on
+redeploy.
+
+In practice: a patient you create during a 10:00 rehearsal is gone by 11:00 if
+the service napped in between. **Create your demo data in the same sitting you
+present it.** You were going to reset the database before demoing anyway, so
+this costs you nothing — it just means doing it last, not first.
+
+Upgrading to the Starter plan ($7) fixes this *and* stops the sleeping. The
+exact change is written at the bottom of `render.yaml`.
 
 **The scheduler is off** (`RECOVERYLENS_SCHEDULER=0` in `render.yaml`),
 deliberately. A public deployment that starts messaging families on a timer is
