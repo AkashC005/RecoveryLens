@@ -114,6 +114,22 @@ def startup() -> None:
         print(f"[scheduler] could not start ({type(exc).__name__}: {exc}). "
               f"Check-ins can still be sent manually.")
 
+    # Say which sender is live. `build_sender()` falls back to the console
+    # sender whenever RECOVERYLENS_MESSAGING is not "twilio", and that fallback
+    # was silent: the UI reported a successful send, the message went to the log,
+    # and the only clue was a small "sent via console" label. On a deployment
+    # where the variable was never set, that is twenty minutes of staring at a
+    # phone that was never going to ring.
+    from messaging import build_sender
+
+    sender = build_sender()
+    if sender.channel == "twilio":
+        print("[messaging] Twilio sender active — sends will reach real phones.")
+    else:
+        print("[messaging] CONSOLE sender — messages are printed here, NOT sent. "
+              "Set RECOVERYLENS_MESSAGING=twilio with TWILIO_ACCOUNT_SID, "
+              "TWILIO_AUTH_TOKEN and TWILIO_FROM (prefixed 'whatsapp:').")
+
     with SessionLocal() as session:
         if is_first_user(session):
             print(f"\n{dev_login_hint()}\n")

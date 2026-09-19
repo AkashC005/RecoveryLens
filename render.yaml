@@ -31,11 +31,27 @@ services:
         sync: false
 
       # --- messaging: leave unset unless you are demonstrating real sends ---
+      # The variable is TWILIO_FROM, not TWILIO_WHATSAPP_FROM, and it must carry
+      # the channel prefix: whatsapp:+14155238886. Twilio treats
+      # `whatsapp:+1...` and `+1...` as different channels and refuses the
+      # mismatch with error 21910.
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: TWILIO_WHATSAPP_FROM
+      - key: TWILIO_FROM
+        sync: false
+
+      # Without this the sender writes messages to the log instead of sending
+      # them — the app looks like it worked and no phone ever buzzes. Set it to
+      # "twilio" only once the three variables above are filled in.
+      - key: RECOVERYLENS_MESSAGING
+        sync: false
+
+      # Where Twilio posts inbound replies, including STOP. Must be the DEPLOYED
+      # url + /api/webhooks/twilio, and must also be set in the Twilio console.
+      # Leave unset if you are demonstrating messaging from your laptop instead.
+      - key: TWILIO_WEBHOOK_URL
         sync: false
 
       # The background sender stays OFF. A public deployment that starts
