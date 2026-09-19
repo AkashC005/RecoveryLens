@@ -77,8 +77,9 @@ app.include_router(media_router)
 # a megabyte. Anything larger is the wrong document.
 MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
 
-# Held so the shutdown hook can stop it. None when scheduling is disabled.
+# Held so the shutdown hook can stop them. None when disabled.
 _scheduler = None
+_inbound_poller = None
 
 
 @app.on_event("startup")
@@ -114,6 +115,16 @@ def startup() -> None:
         print(f"[scheduler] could not start ({type(exc).__name__}: {exc}). "
               f"Check-ins can still be sent manually.")
 
+    # Inbound polling. Reads replies from Twilio when no webhook can be
+    # configured — see messaging/poller.py. A separate switch from the outbound
+    # scheduler because reading carries none of the risk of sending.
+    global _inbound_poller
+    try:
+        from messaging.poller import start as start_poller
+        _inbound_poller = start_poller(SessionLocal)
+    except Exception as exc:
+        print(f"[inbound-poll] could not start ({type(exc).__name__}: {exc}).")
+
     # Say which sender is live. `build_sender()` falls back to the console
     # sender whenever RECOVERYLENS_MESSAGING is not "twilio", and that fallback
     # was silent: the UI reported a successful send, the message went to the log,
@@ -141,12 +152,13 @@ def startup() -> None:
 def shutdown() -> None:
     """Stop the scheduler cleanly so a reload does not leave a job thread
     sending messages from a half-dead process."""
-    if _scheduler is not None:
-        try:
-            _scheduler.shutdown(wait=False)
-            print("[scheduler] stopped.")
-        except Exception:
-            pass
+    for name, job in (("scheduler", _scheduler), ("inbound-poll", _inbound_poller)):
+        if job is not None:
+            try:
+                job.shutdown(wait=False)
+                print(f"[{name}] stopped.")
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------- meta
@@ -936,6 +948,26 @@ def list_prescriptions(patient_id: int, db: Session = Depends(get_db),
         "confirmed_by": p.confirmed_by,
         "confirmed_at": p.confirmed_at,
     } for p in rows]
+
+
+@app.post("/api/messaging/poll", tags=["messaging"])
+def poll_inbound_now(user: User = Depends(current_user)):
+    """Read replies from Twilio right now, rather than at the next interval.
+
+    Exists because a ten-second poll is an awkward thing to stand in front of.
+    Pressing this does exactly what the background job does, so what a
+    clinician sees after clicking is what would have happened anyway — it is
+    not a demo-only path with its own behaviour.
+
+    Returns what it found, including errors, because "nothing happened" and
+    "Twilio rejected the credentials" look identical from the outside.
+    """
+    from messaging.poller import poll_once, polling_enabled, poll_interval_seconds
+
+    result = poll_once(SessionLocal).to_json()
+    result["background_polling"] = polling_enabled()
+    result["interval_seconds"] = poll_interval_seconds() if polling_enabled() else None
+    return result
 
 
 @app.get("/api/patients/{patient_id}", response_model=PatientDetail,

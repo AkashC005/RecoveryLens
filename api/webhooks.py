@@ -27,6 +27,7 @@ logged, because a stream of them means something is misconfigured.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field as dc_field
 import re
 from datetime import datetime, timezone
 import os
@@ -141,9 +142,66 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
     form = _parse_form(await request.body())
     _validate_signature(request, form)
 
-    from_number = str(form.get("From", ""))
+    outcome = process_inbound(
+        db,
+        from_number=str(form.get("From", "")),
+        text=str(form.get("Body", "")).strip(),
+        media_url=form.get("MediaUrl0", "") or None,
+        media_type=form.get("MediaContentType0", "audio/ogg"),
+    )
+
+    # The agent runs AFTER the response, not before it.
+    #
+    # Twilio abandons a webhook after roughly 15 seconds. The triage agent makes
+    # several Claude tool-calls and regularly takes longer, so running it inline
+    # meant the work completed but the reply never reached the carer — ngrok
+    # showed the POST with no status at all. The rules have already run and been
+    # persisted; the agent can only ADD to what they decided, so applying it a
+    # few seconds later keeps the same monotonic guarantee.
+    if outcome.should_run_agent:
+        background.add_task(_run_triage_agent, outcome.checkin_id,
+                            outcome.agent_free_text, list(outcome.agent_rule_reasons))
+
+    return _twiml(outcome.reply)
+
+
+@dataclass
+class InboundOutcome:
+    """What one inbound message did, and what is left to do with it.
+
+    Returned rather than acted on, because the two callers finish differently:
+    the webhook speaks `reply` back as TwiML and hands the agent to a background
+    task; the poller sends `reply` as an outbound message and runs the agent
+    inline, having no request timeout to beat.
+    """
+
+    reply: str
+    checkin_id: int | None = None
+    agent_free_text: str = ""
+    agent_rule_reasons: list = dc_field(default_factory=list)
+    # Short description of what happened, for the poller's log and the
+    # ProcessedInbound record. Not shown to anyone.
+    outcome: str = "handled"
+
+    @property
+    def should_run_agent(self) -> bool:
+        return bool(self.checkin_id and agent_enabled()
+                    and (self.agent_free_text or "").strip())
+
+
+def process_inbound(db: Session, *, from_number: str, text: str,
+                    media_url: str | None = None,
+                    media_type: str = "audio/ogg") -> InboundOutcome:
+    """Handle one inbound message, whoever delivered it.
+
+    THE SINGLE IMPLEMENTATION. A webhook POST and a polled Twilio message are
+    the same event arriving by different routes, and the safety properties —
+    opt-out first, nothing recorded from speech without confirmation, rules
+    before agent, agent may only escalate — must not depend on which route it
+    took. Two copies of this would eventually disagree, and the disagreement
+    would be in the half that is harder to test.
+    """
     patient = _find_patient(db, from_number)
-    text = str(form.get("Body", "")).strip()
 
     # Opt-out first, always. Honoured even from an unknown number, because the
     # number may simply not match our record and a stop request must never be
@@ -153,12 +211,14 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
             patient.opted_out = True
             patient.opted_out_at = utcnow()
             db.commit()
-        return _twiml(compose_stop_confirmation())
+        return InboundOutcome(reply=compose_stop_confirmation(), outcome="opted_out")
 
     if not patient:
-        print(f"[webhook] message from unrecognised number {from_number!r}")
-        return _twiml("Thanks. This number isn't linked to a care record, so we "
-                      "can't act on this message.")
+        print(f"[inbound] message from unrecognised number {from_number!r}")
+        return InboundOutcome(
+            reply=("Thanks. This number isn't linked to a care record, so we "
+                   "can't act on this message."),
+            outcome="unknown_number")
 
     patient.last_inbound_at = utcnow()
 
@@ -168,19 +228,19 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
                .order_by(CheckIn.scheduled_for).first())
     if not checkin:
         db.commit()
-        return _twiml("Thanks — there's no check-in waiting at the moment. "
-                      "Your care team will be in touch at the next one.")
+        return InboundOutcome(
+            reply=("Thanks — there's no check-in waiting at the moment. "
+                   "Your care team will be in touch at the next one."),
+            outcome="no_open_checkin")
 
     # --- voice --------------------------------------------------------------
-    # A voice note arrives as a MediaUrl. Nothing spoken is recorded until the
+    # A voice note arrives as a media URL. Nothing spoken is recorded until the
     # carer confirms the transcript, because ASR's characteristic error drops a
     # negation and inverts the meaning in the reassuring direction.
-    media_url = form.get("MediaUrl0", "")
     if media_url:
-        reply = _handle_voice_note(db, checkin, media_url,
-                                   form.get("MediaContentType0", "audio/ogg"))
+        reply = _handle_voice_note(db, checkin, media_url, media_type)
         db.commit()
-        return _twiml(reply)
+        return InboundOutcome(reply=reply, outcome="voice_pending_confirmation")
 
     # A reply while a transcript is awaiting confirmation is answering the
     # read-back, not starting a new check-in.
@@ -190,7 +250,7 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
         if answer is False:
             _clear_pending(checkin)
             db.commit()
-            return _twiml(compose_discarded())
+            return InboundOutcome(reply=compose_discarded(), outcome="voice_discarded")
         if answer is True:
             text = pending.transcript      # confirmed; proceed as a normal reply
             _clear_pending(checkin)
@@ -200,18 +260,6 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
 
     parsed = parse_reply(text)
 
-    # Rules now, agent later.
-    #
-    # Twilio abandons a webhook after roughly 15 seconds. The triage agent makes
-    # several Claude tool-calls and regularly takes longer, so running it inline
-    # meant the work completed but the reply never reached the carer — ngrok
-    # showed the POST with no status at all.
-    #
-    # So: apply the deterministic rules, persist, and answer immediately. The
-    # agent runs in the background and can only ADD to what the rules decided,
-    # which is the same monotonic guarantee as before — it is simply applied a
-    # few seconds later. A carer waiting on a reply gets one; a clinician sees
-    # the agent's contribution when it lands.
     from .schemas import CheckInSubmission
 
     submission = CheckInSubmission(**parsed.to_submission())
@@ -227,13 +275,14 @@ async def twilio_inbound(request: Request, background: BackgroundTasks,
     checkin.triage = stored
     db.commit()
 
-    # Hand the agent off to a background thread. The response goes out now.
-    if agent_enabled() and (parsed.free_text or "").strip():
-        background.add_task(_run_triage_agent, checkin.id,
-                            parsed.free_text or "", list(result["rule_reasons"]))
-
-    return _twiml(compose_confirmation(result["escalated"],
-                                       result.get("urgency", "routine")))
+    return InboundOutcome(
+        reply=compose_confirmation(result["escalated"],
+                                   result.get("urgency", "routine")),
+        checkin_id=checkin.id,
+        agent_free_text=parsed.free_text or "",
+        agent_rule_reasons=list(result["rule_reasons"]),
+        outcome="escalated" if result["escalated"] else "recorded",
+    )
 
 
 def _apply_rules_only(checkin: CheckIn, sub, db: Session) -> dict:
@@ -395,6 +444,18 @@ def send_checkin(checkin_id: int, db: Session = Depends(get_db),
 
     audio_result = None
     if result.ok and media_url:
+        # The WhatsApp sandbox accepts one message every three seconds. Two
+        # back-to-back sends is exactly the pattern that trips it, and the
+        # casualty would be the audio — the second message — with the text
+        # already delivered and nothing obviously wrong on screen.
+        #
+        # A blocking sleep in a request handler is not something to do lightly.
+        # It is right here because this endpoint is a clinician pressing a
+        # button and waiting for the result, not a hot path, and three seconds
+        # of latency is a far better outcome than a silently missing voice note.
+        import time
+
+        time.sleep(3.2)
         audio_result = sender.send(patient.caregiver_contact, "",
                                    media_url=media_url)
         if not audio_result.ok:

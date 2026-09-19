@@ -208,6 +208,27 @@ class Prescription(Base):
     patient = relationship("Patient", back_populates="prescriptions")
 
 
+class ProcessedInbound(Base):
+    """One row per inbound message we have already acted on.
+
+    The webhook is called once per message, so it never needed this. Polling
+    does: every poll sees the same recent messages again, and without a record
+    of what has been handled a single "yes" from a carer would be re-triaged on
+    every cycle — re-completing the check-in, re-running the agent, and
+    re-sending the confirmation every few seconds.
+
+    Keyed on Twilio's message SID, which is unique and stable. Only the SID is
+    stored; the message body lives on the check-in it belongs to.
+    """
+
+    __tablename__ = "processed_inbound"
+
+    sid = Column(String, primary_key=True, index=True)
+    processed_at = Column(DateTime, default=utcnow, index=True)
+    # What we did with it, for debugging a poll that appears to do nothing.
+    outcome = Column(String, nullable=True)
+
+
 class CheckIn(Base):
     __tablename__ = "check_ins"
 

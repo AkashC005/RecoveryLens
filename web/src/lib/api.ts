@@ -558,6 +558,23 @@ export interface StoredPrescription {
   confirmed_at: string | null;
 }
 
+/** Result of POST /api/messaging/poll — reading replies from Twilio directly.
+ *
+ *  `handled` is what changed; `skipped` is messages already processed, which is
+ *  the normal state and not a problem. `errors` is populated even on a
+ *  successful-looking poll, because "found nothing" and "Twilio rejected the
+ *  credentials" are indistinguishable without it. */
+export interface PollResult {
+  checked: number;
+  handled: number;
+  skipped: number;
+  replies_sent: number;
+  errors: string[];
+  outcomes: { sid: string; outcome: string }[];
+  background_polling: boolean;
+  interval_seconds: number | null;
+}
+
 /** The account created by POST /api/auth/invite. */
 export interface InvitedUser {
   id: number;
@@ -687,6 +704,11 @@ export const api = {
 
   prescriptions: (patientId: number) =>
     request<StoredPrescription[]>(`/api/patients/${patientId}/prescriptions`),
+
+  /** Read carer replies from Twilio now, instead of at the next poll.
+   *  Does exactly what the background job does — not a demo-only path. */
+  pollInbound: () =>
+    request<PollResult>("/api/messaging/poll", { method: "POST" }),
 
   metrics: () => request<Record<string, unknown>>("/api/meta/metrics"),
 

@@ -44,6 +44,7 @@ import type {
   MessagingState,
   PatientDetail as Detail,
   RiskResult,
+  PollResult,
   SendResult,
   StoredPrescription,
   Tier,
@@ -135,6 +136,8 @@ function MessagingBanner({
         </div>
       )}
 
+      <CheckForReplies onChanged={onCleared} />
+
       {/* The override, permanently. `opted_out` false with `opted_out_at` set is
           not the same as a patient who never objected, and the screen must not
           let those two look alike — that is the whole reason the timestamp is
@@ -156,6 +159,68 @@ function MessagingBanner({
         </p>
       )}
     </section>
+  );
+}
+
+/** Pull carer replies from Twilio now, rather than waiting for the next poll.
+ *
+ * Inbound normally arrives by webhook. Where that cannot be configured — the
+ * WhatsApp Sandbox settings now live only in a console upgraded accounts can no
+ * longer reach — the server reads replies from Twilio instead, on an interval.
+ * This button runs that same pass immediately, because a ten-second wait is an
+ * awkward thing to stand in front of.
+ *
+ * It reports what it found, including nothing. "No new replies" and "Twilio
+ * rejected the credentials" look identical from the outside, and the second one
+ * is the one worth knowing about.
+ */
+function CheckForReplies({ onChanged }: { onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<PollResult | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setFailed(null);
+            api
+              .pollInbound()
+              .then((r) => {
+                setResult(r);
+                if (r.handled > 0) onChanged();
+              })
+              .catch((e) => setFailed(String(e)))
+              .finally(() => setBusy(false));
+          }}
+          className="text-xs text-accent disabled:text-muted"
+        >
+          {busy ? "Checking…" : "Check for replies"}
+        </button>
+
+        {result && (
+          <span className={`text-2xs ${result.handled ? "text-calm" : "text-muted"}`}>
+            {result.handled > 0
+              ? `${result.handled} new repl${result.handled === 1 ? "y" : "ies"} processed`
+              : "No new replies"}
+            {result.background_polling && result.interval_seconds
+              ? ` · checking automatically every ${result.interval_seconds}s`
+              : " · automatic checking is off"}
+          </span>
+        )}
+      </div>
+
+      {/* Errors are shown even when the poll "succeeded" — a bad credential
+          produces zero replies and no exception. */}
+      {result?.errors.map((e) => (
+        <p key={e} className="mt-1 text-2xs text-danger">{e}</p>
+      ))}
+      {failed && <p className="mt-1 text-2xs text-danger">{failed}</p>}
+    </div>
   );
 }
 
