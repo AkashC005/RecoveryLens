@@ -106,6 +106,23 @@ def _validate_signature(request: Request, form: dict) -> None:
 
     url = os.getenv("TWILIO_WEBHOOK_URL", "").strip() or str(request.url)
     if not RequestValidator(token).validate(url, form, signature):
+        # Say WHICH url failed. Twilio signs the request using the exact address
+        # it posted to, and the app has to recompute that signature against the
+        # same string — scheme, host and path. The two ways this goes wrong are
+        # both invisible otherwise:
+        #
+        #   1. TWILIO_WEBHOOK_URL still points at an old tunnel while the
+        #      console posts somewhere else.
+        #   2. Nothing is set, so this falls back to `request.url` — which
+        #      behind a proxy like Render's is often http:// internally while
+        #      Twilio signed https://. Same host, different string, 403.
+        #
+        # The carer sees no reply and the clinician sees no escalation, with
+        # nothing anywhere saying why.
+        print(f"[twilio] SIGNATURE REJECTED. Validated against {url!r}. "
+              f"Request arrived at {str(request.url)!r}. If those differ, set "
+              f"TWILIO_WEBHOOK_URL to the exact https URL configured in the "
+              f"Twilio console.")
         raise HTTPException(403, "Invalid Twilio signature.")
 
 
